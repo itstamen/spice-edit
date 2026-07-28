@@ -85,11 +85,14 @@ func TestForm_TabCyclesFocus(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.openForm("Test", scpPrompts(), nil)
 
-	steps := []struct{ key tcell.Key; want int }{
+	steps := []struct {
+		key  tcell.Key
+		want int
+	}{
 		{tcell.KeyTab, 1},
 		{tcell.KeyTab, 2},
-		{tcell.KeyTab, 0},      // wraps
-		{tcell.KeyBacktab, 2},  // wraps backward
+		{tcell.KeyTab, 0},     // wraps
+		{tcell.KeyBacktab, 2}, // wraps backward
 		{tcell.KeyBacktab, 1},
 	}
 	for i, s := range steps {
@@ -147,6 +150,20 @@ func TestForm_TextEditingFlow(t *testing.T) {
 	a.handleFormKey(tcell.NewEventKey(tcell.KeyRune, '~', tcell.ModNone))
 	if a.formValues["REMOTE_SRC"] != "~/tmp/" {
 		t.Fatalf("after Home + insert: %q", a.formValues["REMOTE_SRC"])
+	}
+}
+
+// TestFormMouse_SecondCJKCellMovesToClusterStart mirrors the prompt's click
+// contract for custom-action text fields.
+func TestFormMouse_SecondCJKCellMovesToClusterStart(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.openForm("Test", []customactions.Prompt{
+		{Key: "NAME", Label: "Name", Type: customactions.PromptText, Default: "中a"},
+	}, nil)
+	mx, my, _, _ := a.formModalRect()
+	a.handleFormMouse(mx+3+1, my+4, tcell.Button1)
+	if a.formCursor[0] != 0 {
+		t.Fatalf("cursor = %d, want CJK cluster start 0", a.formCursor[0])
 	}
 }
 

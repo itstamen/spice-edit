@@ -36,13 +36,19 @@ func TestRuneVisualWidth_Tab(t *testing.T) {
 	}
 }
 
-// TestRuneVisualWidth_Other always returns 1 for non-tabs. Wide-char
-// support (CJK, emoji) is intentionally not implemented yet — pinning
-// 1 here makes that gap explicit.
+// TestRuneVisualWidth_Other uses terminal widths for standalone runes.
 func TestRuneVisualWidth_Other(t *testing.T) {
-	for _, r := range []rune{'a', '✓', '☃'} {
-		if got := RuneVisualWidth(r, 0); got != 1 {
-			t.Errorf("RuneVisualWidth(%q) = %d, want 1", r, got)
+	for _, tc := range []struct {
+		r    rune
+		want int
+	}{
+		{'a', 1},
+		{'✓', 1},
+		{'中', 2},
+		{'\u0301', 0},
+	} {
+		if got := RuneVisualWidth(tc.r, 0); got != tc.want {
+			t.Errorf("RuneVisualWidth(%q) = %d, want %d", tc.r, got, tc.want)
 		}
 	}
 }
@@ -77,6 +83,26 @@ func TestLineVisualCol_ClampsBeyondEnd(t *testing.T) {
 	}
 }
 
+// TestLineVisualCol_UsesWideAndCombiningClusters keeps visual cursor columns
+// aligned with terminal graphemes while buffer positions remain rune indexes.
+func TestLineVisualCol_UsesWideAndCombiningClusters(t *testing.T) {
+	runes := []rune("a中e\u0301b")
+	for _, tc := range []struct {
+		col, want int
+	}{
+		{0, 0},
+		{1, 1},
+		{2, 3},
+		{3, 3},
+		{4, 4},
+		{5, 5},
+	} {
+		if got := LineVisualCol(runes, tc.col); got != tc.want {
+			t.Errorf("LineVisualCol(%d) = %d, want %d", tc.col, got, tc.want)
+		}
+	}
+}
+
 // TestRuneColAtVisual_HitInsideTab snaps clicks anywhere in a tab's
 // visual span back to the tab's rune index — clicking on cell 2 of a
 // 4-cell tab should select rune 0 (the tab itself), not "between" it.
@@ -106,6 +132,14 @@ func TestRuneColAtVisual_BeyondEnd(t *testing.T) {
 func TestRuneColAtVisual_NegativeIsZero(t *testing.T) {
 	if got := RuneColAtVisual([]rune("ab"), -3); got != 0 {
 		t.Fatalf("expected 0 for negative input, got %d", got)
+	}
+}
+
+// TestRuneColAtVisual_SecondCJKCellSnapsToClusterStart verifies clicks in
+// either cell of a wide glyph resolve to the same rune position.
+func TestRuneColAtVisual_SecondCJKCellSnapsToClusterStart(t *testing.T) {
+	if got := RuneColAtVisual([]rune("中a"), 1); got != 0 {
+		t.Fatalf("RuneColAtVisual(second CJK cell) = %d, want 0", got)
 	}
 }
 

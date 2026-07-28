@@ -739,6 +739,38 @@ func TestRender_IconsDisabledByDefault(t *testing.T) {
 	}
 }
 
+// TestRender_CJKFilenameUsesTwoCellsPerRune verifies tree rows use terminal
+// cell widths rather than one screen column per Go rune.
+func TestRender_CJKFilenameUsesTwoCellsPerRune(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "中文.txt"), "x")
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	cells, width := renderAndCollect(t, tr, 40, 10)
+	rowY := findRowY(cells, width, 10, "中")
+	if rowY < 0 {
+		t.Fatal("CJK filename row not rendered")
+	}
+
+	row := rowText(cells, width, rowY)
+	first := -1
+	for col, r := range []rune(row) {
+		if r == '中' {
+			first = col
+			break
+		}
+	}
+	if first < 0 {
+		t.Fatalf("missing first CJK glyph in row %q", row)
+	}
+	if got := []rune(row)[first+2]; got != '文' {
+		t.Fatalf("second CJK glyph at col %d = %q, want 文", first+2, got)
+	}
+}
+
 // TestRender_IconsEnabledShowsFolderGlyph verifies that flipping
 // IconsEnabled actually emits the folder-closed glyph for an
 // unexpanded directory — the most common visible case.

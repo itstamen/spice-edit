@@ -23,6 +23,8 @@ package editor
 import (
 	"path/filepath"
 	"strings"
+
+	"github.com/cloudmanic/spice-edit/internal/termtext"
 )
 
 // TabStop is the visual cell width of a hard tab. Four matches what most
@@ -37,10 +39,9 @@ const defaultSpaceIndent = "    "
 
 // RuneVisualWidth returns the cell count occupied by r when it lands at the
 // given visualCol (0-based, measured from the start of the line). Hard tabs
-// expand to fill enough cells to reach the next TabStop boundary; everything
-// else is one cell. This deliberately ignores east-asian wide chars and
-// combining marks — the rest of the buffer code treats one rune as one cell
-// and adding wide-char support is a separate, larger project.
+// expand to fill enough cells to reach the next TabStop boundary. Other runes
+// use their terminal width; callers that need full emoji/combining-sequence
+// support should use the grapheme-aware line helpers below.
 func RuneVisualWidth(r rune, visualCol int) int {
 	if r == '\t' {
 		w := TabStop - (visualCol % TabStop)
@@ -49,7 +50,11 @@ func RuneVisualWidth(r rune, visualCol int) int {
 		}
 		return w
 	}
-	return 1
+	width := termtext.StringWidth(string(r))
+	if width < 0 {
+		return 0
+	}
+	return width
 }
 
 // LineVisualCol returns the visual column (0-based) at the rune position
@@ -59,12 +64,21 @@ func RuneVisualWidth(r rune, visualCol int) int {
 // runeCol is clamped to [0, len(runes)] so callers can pass an end-of-line
 // position without bounds-checking.
 func LineVisualCol(runes []rune, runeCol int) int {
+	if runeCol < 0 {
+		runeCol = 0
+	}
 	if runeCol > len(runes) {
 		runeCol = len(runes)
 	}
 	visualCol := 0
-	for i := 0; i < runeCol; i++ {
-		visualCol += RuneVisualWidth(runes[i], visualCol)
+	for _, cluster := range lineClusters(runes) {
+		if runeCol <= cluster.StartRune {
+			return visualCol
+		}
+		if runeCol < cluster.EndRune {
+			return visualCol
+		}
+		visualCol += clusterVisualWidth(cluster, visualCol)
 	}
 	return visualCol
 }
@@ -82,14 +96,70 @@ func RuneColAtVisual(runes []rune, targetVisualCol int) int {
 		return 0
 	}
 	visualCol := 0
-	for i, r := range runes {
-		w := RuneVisualWidth(r, visualCol)
-		if targetVisualCol < visualCol+w {
-			return i
+	for _, cluster := range lineClusters(runes) {
+		width := clusterVisualWidth(cluster, visualCol)
+		if width > 0 && targetVisualCol < visualCol+width {
+			return cluster.StartRune
 		}
-		visualCol += w
+		visualCol += width
 	}
 	return len(runes)
+}
+
+// runeColAtOrAfterVisual returns a safe grapheme boundary at or after the
+// requested visual column. When horizontal scrolling lands inside a wide
+// grapheme, it advances to the cluster's end instead of displaying half a
+// glyph at the left edge of the viewport.
+func runeColAtOrAfterVisual(runes []rune, targetVisualCol int) int {
+	if targetVisualCol <= 0 {
+		return 0
+	}
+	visualCol := 0
+	for _, cluster := range lineClusters(runes) {
+		if targetVisualCol <= visualCol {
+			return cluster.StartRune
+		}
+		width := clusterVisualWidth(cluster, visualCol)
+		if width > 0 && targetVisualCol < visualCol+width {
+			return cluster.EndRune
+		}
+		visualCol += width
+	}
+	return len(runes)
+}
+
+// normalizedRuneCol returns runeCol clamped to the line and advanced out of
+// a grapheme interior. Buffer editing intentionally remains rune-indexed, but
+// a rendered viewport must never begin halfway through a grapheme.
+func normalizedRuneCol(runes []rune, runeCol int) int {
+	if runeCol <= 0 {
+		return 0
+	}
+	if runeCol >= len(runes) {
+		return len(runes)
+	}
+	for _, cluster := range lineClusters(runes) {
+		if runeCol > cluster.StartRune && runeCol < cluster.EndRune {
+			return cluster.EndRune
+		}
+	}
+	return runeCol
+}
+
+// lineClusters converts the buffer's rune slice into terminal graphemes. Its
+// ranges remain indexed in the original rune slice so cursor and selection
+// state do not need a broader storage migration.
+func lineClusters(runes []rune) []termtext.Cluster {
+	return termtext.Clusters(string(runes))
+}
+
+// clusterVisualWidth applies the editor's tab-stop rule to a grapheme and
+// otherwise returns the terminal width computed by termtext.
+func clusterVisualWidth(cluster termtext.Cluster, visualCol int) int {
+	if cluster.Text == "\t" {
+		return RuneVisualWidth('\t', visualCol)
+	}
+	return cluster.Width
 }
 
 // DetectIndent picks the indent unit a freshly-opened buffer should use

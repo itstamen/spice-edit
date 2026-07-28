@@ -34,6 +34,7 @@ import (
 	"github.com/cloudmanic/spice-edit/internal/finder"
 	"github.com/cloudmanic/spice-edit/internal/icons"
 	"github.com/cloudmanic/spice-edit/internal/spiceconfig"
+	"github.com/cloudmanic/spice-edit/internal/termtext"
 	"github.com/cloudmanic/spice-edit/internal/theme"
 	"github.com/cloudmanic/spice-edit/internal/version"
 )
@@ -799,9 +800,7 @@ func splitErrorOutput(runErr error, out []byte) []string {
 		count := 0
 		for _, ln := range strings.Split(captured, "\n") {
 			ln = strings.TrimRight(ln, "\r")
-			if runeLen(ln) > maxLineWidth {
-				ln = string([]rune(ln)[:maxLineWidth-1]) + "…"
-			}
+			ln = termtext.Truncate(ln, maxLineWidth)
 			body = append(body, ln)
 			count++
 			if count >= maxLines {
@@ -2332,18 +2331,18 @@ func (a *App) iconsOn() bool {
 func (a *App) layoutTabs() []tabRect {
 	out := make([]tabRect, 0, len(a.tabs))
 	cursor := a.sidebarW() + menuButtonWidth
-	iconW := 0
-	if a.iconsOn() {
-		iconW = 2 // glyph + space
-	}
 	for i, t := range a.tabs {
-		nameLen := len([]rune(t.DisplayName()))
-		w := 1 + 2 + iconW + nameLen + 1 + 1 + 1 // pad+dirty+icon?+name+space+×+pad
+		nameWidth := termtext.StringWidth(t.DisplayName())
+		iconWidth := 0
+		if a.iconsOn() {
+			iconWidth = termtext.StringWidth(icons.For(t.DisplayName(), false, false)) + 1
+		}
+		w := 1 + 2 + iconWidth + nameWidth + 1 + 1 + 1 // pad+dirty+icon?+name+space+×+pad
 		out = append(out, tabRect{
 			Index:  i,
 			X:      cursor,
 			Width:  w,
-			CloseX: cursor + 1 + 2 + iconW + nameLen + 1,
+			CloseX: cursor + 1 + 2 + iconWidth + nameWidth + 1,
 		})
 		cursor += w
 	}
@@ -2400,29 +2399,27 @@ func (a *App) drawTabBar() {
 			if active {
 				gst = gst.Bold(true)
 			}
-			for _, gr := range glyph {
-				if col >= tx+tw {
-					break
-				}
-				a.screen.SetContent(col, ty, gr, nil, gst)
-				col++
+			if col < tx+tw {
+				available := tx + tw - col
+				col += termtext.DrawString(a.screen, col, ty, available, glyph, gst)
 			}
 			col++ // separator space after glyph
 		}
-		for _, ru := range tab.DisplayName() {
-			if col >= tx+tw {
-				break
-			}
-			a.screen.SetContent(col, ty, ru, nil, st)
-			col++
-		}
-		col++ // separator space before ×
 		if col < tx+tw {
+			available := r.CloseX - 1 - col
+			if terminalAvailable := tx + tw - col; available > terminalAvailable {
+				available = terminalAvailable
+			}
+			if available > 0 {
+				col += termtext.DrawString(a.screen, col, ty, available, tab.DisplayName(), st)
+			}
+		}
+		if r.CloseX < tx+tw {
 			closeStyle := st.Foreground(a.theme.Muted)
 			if active {
 				closeStyle = st.Foreground(a.theme.Subtle)
 			}
-			a.screen.SetContent(col, ty, '×', nil, closeStyle)
+			a.screen.SetContent(r.CloseX, ty, '×', nil, closeStyle)
 		}
 	}
 }
@@ -2478,14 +2475,10 @@ func (a *App) drawEmptyEditor() {
 	cy := ey + eh/2
 	msg1 := "No file open"
 	msg2 := "Click a file in the tree, or  ≡  for the menu"
-	cx1 := ex + (ew-len([]rune(msg1)))/2
-	for i, r := range msg1 {
-		a.screen.SetContent(cx1+i, cy-1, r, nil, bold)
-	}
-	cx2 := ex + (ew-len([]rune(msg2)))/2
-	for i, r := range msg2 {
-		a.screen.SetContent(cx2+i, cy+1, r, nil, muted)
-	}
+	cx1 := ex + (ew-termtext.StringWidth(msg1))/2
+	termtext.DrawString(a.screen, cx1, cy-1, ew, msg1, bold)
+	cx2 := ex + (ew-termtext.StringWidth(msg2))/2
+	termtext.DrawString(a.screen, cx2, cy+1, ew, msg2, muted)
 	a.screen.HideCursor()
 }
 
@@ -2505,7 +2498,7 @@ func (a *App) drawStatusBar() {
 	var rightWidth int
 	if a.gitBranch != "" {
 		right := " " + a.gitBranch + " "
-		rw := len([]rune(right))
+		rw := termtext.StringWidth(right)
 		if rw < sw {
 			drawAt(a.screen, sx+sw-rw, sy, right, style)
 			rightWidth = rw
@@ -2557,16 +2550,11 @@ func (a *App) drawTooSmall() {
 	}
 	msg := "Window too small — please resize"
 	cy := a.height / 2
-	cx := (a.width - len([]rune(msg))) / 2
+	cx := (a.width - termtext.StringWidth(msg)) / 2
 	if cx < 0 {
 		cx = 0
 	}
-	for i, r := range msg {
-		if cx+i >= a.width {
-			break
-		}
-		a.screen.SetContent(cx+i, cy, r, nil, style)
-	}
+	termtext.DrawString(a.screen, cx, cy, a.width-cx, msg, style)
 	a.screen.HideCursor()
 }
 
@@ -2621,14 +2609,14 @@ func (a *App) drawMenu() {
 	// Title row: " Menu" on the left, "esc " on the right.
 	drawAt(a.screen, mx+1, my+1, " Menu", titleStyle)
 	hint := "esc "
-	drawAt(a.screen, mx+mw-1-len([]rune(hint)), my+1, hint, mutedStyle)
+	drawAt(a.screen, mx+mw-1-termtext.StringWidth(hint), my+1, hint, mutedStyle)
 
 	// Version stamp baked into the bottom border, right-aligned. A small
 	// pad of dashes is left between the version text and the corner so it
 	// reads as part of the frame rather than a label awkwardly butted up
 	// against the border.
 	verLabel := " v" + version.Version + " "
-	verLen := len([]rune(verLabel))
+	verLen := termtext.StringWidth(verLabel)
 	verX := mx + mw - 2 - verLen
 	if verX > mx+1 {
 		drawAt(a.screen, verX, my+mh-1, verLabel, mutedStyle)
@@ -2671,11 +2659,11 @@ func (a *App) drawMenu() {
 		}
 		drawAt(a.screen, mx+2, cy, "▸", chevStyle)
 		if item.shortcut == "" {
-			drawAt(a.screen, mx+4, cy, label, labelStyle)
+			drawAtWidth(a.screen, mx+4, cy, mw-6, label, labelStyle)
 			continue
 		}
-		shortcutX := mx + mw - 2 - runeLen(item.shortcut)
-		label = trimRunes(label, shortcutX-(mx+4)-2)
+		shortcutX := mx + mw - 2 - textWidth(item.shortcut)
+		label = truncateText(label, shortcutX-(mx+4)-2)
 		drawAt(a.screen, mx+4, cy, label, labelStyle)
 		drawAt(a.screen, shortcutX, cy, item.shortcut, shortcutStyle)
 	}
@@ -2686,40 +2674,31 @@ func (a *App) drawMenu() {
 // drawStatusText writes s left-aligned into the status bar at (x, y) with a
 // max width of maxW cells. Truncates rather than wraps.
 func drawStatusText(scr tcell.Screen, x, y, maxW int, s string, st tcell.Style) {
-	col := 0
-	for _, r := range s {
-		if col >= maxW {
-			return
-		}
-		scr.SetContent(x+col, y, r, nil, st)
-		col++
-	}
+	termtext.DrawString(scr, x, y, maxW, s, st)
 }
 
 // drawAt writes s starting at (x, y) without bounds checking. Callers are
 // expected to keep the string within the rectangle they're drawing into.
 func drawAt(scr tcell.Screen, x, y int, s string, st tcell.Style) {
-	col := 0
-	for _, r := range s {
-		scr.SetContent(x+col, y, r, nil, st)
-		col++
-	}
+	termtext.DrawString(scr, x, y, termtext.StringWidth(s), s, st)
 }
 
-// trimRunes shortens s to max visible cells, reserving the final cell for an
-// ellipsis when truncation is needed.
-func trimRunes(s string, max int) string {
-	if max <= 0 {
-		return ""
-	}
-	if runeLen(s) <= max {
-		return s
-	}
-	if max == 1 {
-		return "…"
-	}
-	rs := []rune(s)
-	return string(rs[:max-1]) + "…"
+// drawAtWidth draws a whole-grapheme prefix of s in the explicitly bounded
+// cell range beginning at x. Modal and menu callers use it to keep wide text
+// from bleeding into borders, hints, or adjacent controls.
+func drawAtWidth(scr tcell.Screen, x, y, maxW int, s string, st tcell.Style) int {
+	return termtext.DrawString(scr, x, y, maxW, s, st)
+}
+
+// textWidth returns the number of terminal cells a string occupies.
+func textWidth(s string) int {
+	return termtext.StringWidth(s)
+}
+
+// truncateText shortens s to max visible cells, reserving the final cell for
+// an ellipsis when truncation is needed.
+func truncateText(s string, max int) string {
+	return termtext.Truncate(s, max)
 }
 
 // detectLangLabel returns a short label for the active file's language —

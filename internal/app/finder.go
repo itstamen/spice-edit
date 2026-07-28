@@ -20,8 +20,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/cloudmanic/spice-edit/internal/finder"
 	"github.com/gdamore/tcell/v2"
+
+	"github.com/cloudmanic/spice-edit/internal/finder"
+	"github.com/cloudmanic/spice-edit/internal/termtext"
 )
 
 const (
@@ -296,9 +298,9 @@ func (a *App) drawFinder() {
 	drawBorder(a.screen, mx, my, mw, mh, borderStyle)
 	drawHDivider(a.screen, mx, my+2, mw, borderStyle)
 
-	drawAt(a.screen, mx+1, my+1, " Find file", titleStyle)
+	drawAtWidth(a.screen, mx+1, my+1, mw-2-textWidth("esc "), " Find file", titleStyle)
 	hint := "esc "
-	drawAt(a.screen, mx+mw-1-runeLen(hint), my+1, hint, mutedStyle)
+	drawAt(a.screen, mx+mw-1-textWidth(hint), my+1, hint, mutedStyle)
 
 	// Input row.
 	inputBg := a.theme.BG
@@ -306,21 +308,10 @@ func (a *App) drawFinder() {
 	fieldStart := mx + 3
 	fieldEnd := mx + mw - 12 // leave room for the count on the right
 	fieldWidth := fieldEnd - fieldStart
-	a.adjustFinderScroll(fieldWidth)
 	for cx := fieldStart - 1; cx <= fieldEnd; cx++ {
 		a.screen.SetContent(cx, my+3, ' ', nil, inputStyle)
 	}
-	for i := 0; i < fieldWidth; i++ {
-		idx := a.finderScroll + i
-		if idx >= len(a.finderQuery) {
-			break
-		}
-		a.screen.SetContent(fieldStart+i, my+3, a.finderQuery[idx], nil, inputStyle)
-	}
-	caret := fieldStart + (a.finderCursor - a.finderScroll)
-	if caret >= fieldStart && caret <= fieldEnd {
-		a.screen.ShowCursor(caret, my+3)
-	}
+	drawTextInput(a.screen, fieldStart, my+3, fieldWidth, a.finderQuery, a.finderCursor, &a.finderScroll, inputStyle, true)
 
 	// Match count tail.
 	state, total, viaGit := finder.StateIdle, 0, false
@@ -338,7 +329,7 @@ func (a *App) drawFinder() {
 	case finder.StateReady:
 		tail = countLabel(len(a.finderResults), total) + " "
 	}
-	drawAt(a.screen, mx+mw-1-runeLen(tail), my+3, tail, mutedStyle)
+	drawAt(a.screen, mx+mw-1-textWidth(tail), my+3, tail, mutedStyle)
 
 	// Result rows. We paint the visible window (no scrolling support
 	// in v1 — we just cap at finderResultsVisible). When the query
@@ -396,46 +387,44 @@ func (a *App) drawFinderRow(mx, ry, mw int, r finder.Result, selected bool, hitS
 			break
 		}
 	}
-	matchSet := map[int]bool{}
-	for _, m := range r.MatchedIndexes {
-		matchSet[m] = true
-	}
-
 	startCol := mx + 2
 	maxCols := mw - 4
-	for i, ch := range pathRunes {
-		if i >= maxCols {
+	drawn := 0
+	for _, cluster := range termtext.Clusters(r.Path) {
+		if drawn+cluster.Width > maxCols {
 			break
 		}
 		st := rowStyle
-		if i <= sepIdx {
+		if cluster.StartRune <= sepIdx {
 			st = mutedOnRow
 		}
-		if matchSet[i] {
+		if anyFinderRuneMatched(r.MatchedIndexes, cluster.StartRune, cluster.EndRune) {
 			st = hitOnRow
 		}
-		a.screen.SetContent(startCol+i, ry, ch, nil, st)
+		used, ok := termtext.DrawCluster(a.screen, startCol+drawn, ry, maxCols-drawn, cluster, st)
+		if !ok {
+			break
+		}
+		drawn += used
 	}
 }
 
-// adjustFinderScroll keeps the input cursor visible by sliding
-// finderScroll left or right within the input field. Same shape
-// as adjustPromptScroll — pulled into its own method so the two
-// can evolve independently if either modal grows new behaviours.
+// anyFinderRuneMatched reports whether a rune-indexed finder result intersects
+// a grapheme range. Finder scoring stays rune-based; only its renderer needs
+// to expand a hit across an indivisible terminal glyph.
+func anyFinderRuneMatched(matches []int, start, end int) bool {
+	for _, match := range matches {
+		if match >= start && match < end {
+			return true
+		}
+	}
+	return false
+}
+
+// adjustFinderScroll remains as a focused unit-test seam while the shared
+// input renderer owns production drawing and scroll behavior.
 func (a *App) adjustFinderScroll(width int) {
-	if width <= 0 {
-		a.finderScroll = 0
-		return
-	}
-	if a.finderCursor < a.finderScroll {
-		a.finderScroll = a.finderCursor
-	}
-	if a.finderCursor-a.finderScroll >= width {
-		a.finderScroll = a.finderCursor - width + 1
-	}
-	if a.finderScroll < 0 {
-		a.finderScroll = 0
-	}
+	a.finderScroll = textInputScroll(string(a.finderQuery), a.finderCursor, a.finderScroll, width)
 }
 
 // countLabel formats the "shown/total" tail. Pulled into its own

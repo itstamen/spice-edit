@@ -17,6 +17,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/cloudmanic/spice-edit/internal/termtext"
 	"github.com/cloudmanic/spice-edit/internal/theme"
 )
 
@@ -523,11 +524,19 @@ func (t *Tab) EnsureVisible(viewW, viewH int) {
 	if t.Cursor.Line >= t.ScrollY+viewH {
 		t.ScrollY = t.Cursor.Line - viewH + 1
 	}
-	if t.Cursor.Col < t.ScrollX {
-		t.ScrollX = t.Cursor.Col
-	}
-	if t.Cursor.Col >= t.ScrollX+contentW {
-		t.ScrollX = t.Cursor.Col - contentW + 1
+	if t.Cursor.Line >= 0 && t.Cursor.Line < t.Buffer.LineCount() {
+		runes := t.Buffer.LineRunes(t.Cursor.Line)
+		t.ScrollX = normalizedRuneCol(runes, t.ScrollX)
+		cursorVisual := LineVisualCol(runes, t.Cursor.Col)
+		scrollVisual := LineVisualCol(runes, t.ScrollX)
+		if cursorVisual < scrollVisual {
+			t.ScrollX = runeColAtOrAfterVisual(runes, cursorVisual)
+			scrollVisual = LineVisualCol(runes, t.ScrollX)
+		}
+		if cursorVisual >= scrollVisual+contentW {
+			targetVisual := cursorVisual - contentW + 1
+			t.ScrollX = runeColAtOrAfterVisual(runes, targetVisual)
+		}
 	}
 	if t.ScrollY < 0 {
 		t.ScrollY = 0
@@ -622,60 +631,26 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 			scr.SetContent(x+i, cy, r, nil, gutterStyle)
 		}
 
-		// Line content, with syntax styles, selection bg, and line bg.
-		// We walk from the start of the line so tab stops anchor to col 0
-		// — a tab one cell into the line still expands to the next stop,
-		// not the next-stop-from-the-scroll-offset. ScrollX skips runes;
-		// the visual column we paint at is rune-walked from there.
+		// Line content, with syntax styles, selection bg, and line bg. We
+		// walk graphemes from the start of the line so tab stops anchor to
+		// column 0 and every wide glyph owns all of its terminal cells.
 		runes := []rune(t.Buffer.Lines[lineIdx])
 		var styles []tcell.Style
 		if lineIdx < len(t.Styles) {
 			styles = t.Styles[lineIdx]
 		}
-		scrollVisual := LineVisualCol(runes, t.ScrollX)
+		lineScrollX := normalizedRuneCol(runes, t.ScrollX)
+		scrollVisual := LineVisualCol(runes, lineScrollX)
 		visualCol := 0 // visual cell offset from the start of the LINE
-		for runeIdx, r := range runes {
-			width := RuneVisualWidth(r, visualCol)
-			if runeIdx >= t.ScrollX {
-				// Once we're past ScrollX, paint each cell of this rune.
-				// The rune's first cell shows the actual glyph (or ' '
-				// for tabs); padding cells for a multi-cell tab show a
-				// space so the trailing tab area still gets the right bg.
-				st := bgStyle
-				if runeIdx < len(styles) {
-					st = styles[runeIdx]
-				}
-				st = st.Background(lineBg)
-				if hasSel {
-					p := Position{Line: lineIdx, Col: runeIdx}
-					if !PosLess(p, selStart) && PosLess(p, selEnd) {
-						st = st.Background(th.Selection)
-					}
-				}
-				if mIdx := t.matchAtRune(lineIdx, runeIdx); mIdx >= 0 {
-					if mIdx == t.FindIndex {
-						st = st.Background(th.FindCurrent).Foreground(th.BG)
-					} else {
-						st = st.Background(th.FindMatch)
-					}
-				}
-				glyph := r
-				if r == '\t' {
-					glyph = ' '
-				}
-				for cell := 0; cell < width; cell++ {
-					sc := visualCol - scrollVisual + cell
-					if sc < 0 {
-						continue
-					}
-					if sc >= contentW {
-						break
-					}
-					ch := glyph
-					if cell > 0 {
-						ch = ' '
-					}
-					scr.SetContent(contentX+sc, cy, ch, nil, st)
+		for _, cluster := range lineClusters(runes) {
+			width := clusterVisualWidth(cluster, visualCol)
+			screenCol := visualCol - scrollVisual
+			if cluster.EndRune > lineScrollX && screenCol >= 0 && screenCol+width <= contentW {
+				style := t.clusterStyle(lineIdx, cluster, styles, selStart, selEnd, hasSel, lineBg, th)
+				if cluster.Text == "\t" {
+					drawTabCells(scr, contentX+screenCol, cy, width, style)
+				} else {
+					termtext.DrawCluster(scr, contentX+screenCol, cy, contentW-screenCol, cluster, style)
 				}
 			}
 			visualCol += width
@@ -689,7 +664,7 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		// visual width of the line; scrollVisual is the visual cell
 		// corresponding to ScrollX.
 		overflowStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Muted)
-		if t.ScrollX > 0 {
+		if lineScrollX > 0 {
 			scr.SetContent(contentX, cy, '‹', nil, overflowStyle)
 		}
 		if visualCol-scrollVisual > contentW {
@@ -709,6 +684,43 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		scr.ShowCursor(cx, cy)
 	} else {
 		scr.HideCursor()
+	}
+}
+
+// clusterStyle resolves syntax, selection, and find styles for an entire
+// grapheme. Any selected or matched member rune styles the whole cluster so
+// combining marks and wide glyphs cannot show mixed half-cell highlights.
+func (t *Tab) clusterStyle(line int, cluster termtext.Cluster, styles []tcell.Style, selStart, selEnd Position, hasSel bool, lineBg tcell.Color, th theme.Theme) tcell.Style {
+	style := tcell.StyleDefault.Background(lineBg).Foreground(th.Text)
+	if cluster.StartRune < len(styles) {
+		style = styles[cluster.StartRune].Background(lineBg)
+	}
+	if hasSel {
+		for runeCol := cluster.StartRune; runeCol < cluster.EndRune; runeCol++ {
+			position := Position{Line: line, Col: runeCol}
+			if !PosLess(position, selStart) && PosLess(position, selEnd) {
+				style = style.Background(th.Selection)
+				break
+			}
+		}
+	}
+	for runeCol := cluster.StartRune; runeCol < cluster.EndRune; runeCol++ {
+		if matchIndex := t.matchAtRune(line, runeCol); matchIndex >= 0 {
+			if matchIndex == t.FindIndex {
+				return style.Background(th.FindCurrent).Foreground(th.BG)
+			}
+			return style.Background(th.FindMatch)
+		}
+	}
+	return style
+}
+
+// drawTabCells fills a tab stop with spaces. Tabs are layout whitespace, not
+// wide glyphs, so painting their cells individually preserves the existing
+// tab-stop appearance while still using grapheme geometry around them.
+func drawTabCells(scr tcell.Screen, x, y, width int, style tcell.Style) {
+	for cell := 0; cell < width; cell++ {
+		scr.SetContent(x+cell, y, ' ', nil, style)
 	}
 }
 
@@ -747,10 +759,11 @@ func (t *Tab) HitTest(localX, localY, w, h int) (Position, bool) {
 		return Position{Line: line, Col: 0}, true
 	}
 	runes := []rune(t.Buffer.Lines[line])
-	// Convert the click's screen column back to a rune column. With tabs
-	// expanding to multi-cell tab stops we can't just subtract ScrollX
-	// from localX — we have to walk the runes counting visual cells.
-	scrollVisual := LineVisualCol(runes, t.ScrollX)
+	// Convert the click's screen column back to a rune column. Tabs and wide
+	// graphemes expand to multiple cells, so we walk terminal visual columns
+	// instead of subtracting rune indexes.
+	lineScrollX := normalizedRuneCol(runes, t.ScrollX)
+	scrollVisual := LineVisualCol(runes, lineScrollX)
 	targetVisual := scrollVisual + (localX - contentX)
 	col := RuneColAtVisual(runes, targetVisual)
 	if col > len(runes) {
@@ -772,17 +785,27 @@ func (t *Tab) Scroll(deltaLines int) {
 	}
 }
 
-// ScrollH moves the viewport horizontally by delta rune-columns (negative
+// ScrollH moves the viewport horizontally by delta terminal cells (negative
 // = left). Clamped at zero; the right side is naturally bounded by
 // Render's contentW window — scrolling past the longest visible line just
 // shows blank space, which is fine. Lives next to Scroll so the app's
 // mouse-wheel dispatcher can treat horizontal and vertical wheels
 // symmetrically.
 func (t *Tab) ScrollH(deltaCols int) {
-	t.ScrollX += deltaCols
-	if t.ScrollX < 0 {
-		t.ScrollX = 0
+	if t.Buffer == nil || t.Buffer.LineCount() == 0 {
+		return
 	}
+	line := t.Cursor.Line
+	if line < 0 || line >= t.Buffer.LineCount() {
+		line = 0
+	}
+	runes := t.Buffer.LineRunes(line)
+	currentVisual := LineVisualCol(runes, normalizedRuneCol(runes, t.ScrollX))
+	targetVisual := currentVisual + deltaCols
+	if targetVisual < 0 {
+		targetVisual = 0
+	}
+	t.ScrollX = runeColAtOrAfterVisual(runes, targetVisual)
 }
 
 // clampScroll keeps ScrollY inside a sensible range for the current viewport

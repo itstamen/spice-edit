@@ -180,9 +180,10 @@ func (a *App) drawForm() {
 	drawBorder(a.screen, mx, my, mw, mh, borderStyle)
 	drawHDivider(a.screen, mx, my+2, mw, borderStyle)
 
-	drawAt(a.screen, mx+1, my+1, " "+a.formTitle, titleStyle)
+	titleWidth := mw - 2 - textWidth("esc ")
+	drawAtWidth(a.screen, mx+1, my+1, titleWidth, " "+a.formTitle, titleStyle)
 	hint := "esc "
-	drawAt(a.screen, mx+mw-1-runeLen(hint), my+1, hint, mutedStyle)
+	drawAt(a.screen, mx+mw-1-textWidth(hint), my+1, hint, mutedStyle)
 
 	a.screen.HideCursor()
 	for i, p := range a.formPrompts {
@@ -194,7 +195,7 @@ func (a *App) drawForm() {
 		if i == a.formFocus {
 			labelStyle = titleStyle
 		}
-		drawAt(a.screen, mx+2, labelRow, p.Label, labelStyle)
+		drawAtWidth(a.screen, mx+2, labelRow, mw-4, p.Label, labelStyle)
 
 		fieldStart := mx + 3
 		fieldEnd := mx + mw - 3
@@ -211,23 +212,9 @@ func (a *App) drawForm() {
 
 		switch p.Type {
 		case customactions.PromptText:
-			a.adjustFormScroll(i, fieldWidth)
 			text := a.formText[i]
 			cursor := a.formCursor[i]
-			scroll := a.formScroll[i]
-			for j := 0; j < fieldWidth; j++ {
-				idx := scroll + j
-				if idx >= len(text) {
-					break
-				}
-				a.screen.SetContent(fieldStart+j, inputRow, text[idx], nil, inputStyle)
-			}
-			if i == a.formFocus {
-				caret := fieldStart + (cursor - scroll)
-				if caret >= fieldStart && caret <= fieldEnd {
-					a.screen.ShowCursor(caret, inputRow)
-				}
-			}
+			drawTextInput(a.screen, fieldStart, inputRow, fieldWidth, text, cursor, &a.formScroll[i], inputStyle, i == a.formFocus)
 		case customactions.PromptSelect:
 			// Render as "‹  option  ›" centered-ish. The chevrons
 			// double as click targets via handleFormMouse; we offset
@@ -239,8 +226,9 @@ func (a *App) drawForm() {
 			if idx := a.formCursor[i]; idx >= 0 && idx < len(p.Options) {
 				opt = p.Options[idx]
 			}
-			startX := fieldStart + (fieldWidth-runeLen(opt))/2
-			drawAt(a.screen, startX, inputRow, opt, inputStyle)
+			opt = truncateText(opt, fieldWidth-4)
+			startX := fieldStart + (fieldWidth-textWidth(opt))/2
+			drawAtWidth(a.screen, startX, inputRow, fieldWidth-2, opt, inputStyle)
 		}
 	}
 
@@ -249,26 +237,10 @@ func (a *App) drawForm() {
 	drawButton(a.screen, submitX, btnY, "[ Submit ]", bg, a.theme.Accent, true)
 }
 
-// adjustFormScroll keeps the caret within the visible window of a
-// text row's input field. Mirror of adjustPromptScroll; lives here
-// because the form's per-row scroll state is its own slice.
+// adjustFormScroll remains as a focused unit-test seam while the shared input
+// renderer owns production drawing and scroll behavior.
 func (a *App) adjustFormScroll(i, width int) {
-	if width <= 0 {
-		a.formScroll[i] = 0
-		return
-	}
-	cursor := a.formCursor[i]
-	scroll := a.formScroll[i]
-	if cursor < scroll {
-		scroll = cursor
-	}
-	if cursor >= scroll+width {
-		scroll = cursor - width + 1
-	}
-	if scroll < 0 {
-		scroll = 0
-	}
-	a.formScroll[i] = scroll
+	a.formScroll[i] = textInputScroll(string(a.formText[i]), a.formCursor[i], a.formScroll[i], width)
 }
 
 // handleFormKey routes keystrokes while the form is open. Tab moves
@@ -458,15 +430,7 @@ func (a *App) handleFormMouse(x, y int, btn tcell.ButtonMask) {
 				fieldStart := mx + 3
 				fieldEnd := mx + mw - 3
 				if x >= fieldStart && x < fieldEnd {
-					localCol := x - fieldStart
-					target := a.formScroll[i] + localCol
-					if target < 0 {
-						target = 0
-					}
-					if target > len(a.formText[i]) {
-						target = len(a.formText[i])
-					}
-					a.formCursor[i] = target
+					a.formCursor[i] = textInputCursorAt(a.formText[i], a.formScroll[i], x-fieldStart)
 				}
 			}
 			return

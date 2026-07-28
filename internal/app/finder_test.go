@@ -348,3 +348,27 @@ func TestOpenFinder_NoOpInSingleFileMode(t *testing.T) {
 		t.Fatal("expected a flash explaining the finder is unavailable")
 	}
 }
+
+// TestDrawFinderRow_CJKHighlightsWholeCluster keeps finder scoring's
+// rune-indexed matches while drawing the matched CJK grapheme in hit style.
+func TestDrawFinderRow_CJKHighlightsWholeCluster(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	mx, ry, mw := 5, 4, 30
+	modalBG := a.theme.LineHL
+	hitStyle := tcell.StyleDefault.Background(modalBG).Foreground(a.theme.FindCurrent).Bold(true)
+	mutedStyle := tcell.StyleDefault.Background(modalBG).Foreground(a.theme.Muted)
+	a.drawFinderRow(mx, ry, mw, finder.Result{
+		Path:           "目录/中文.txt",
+		MatchedIndexes: []int{3}, // 中 is rune 3 after 目、录、/.
+	}, false, hitStyle, mutedStyle, modalBG)
+
+	scr := a.screen.(tcell.SimulationScreen)
+	text, style, width := scr.Get(mx+2+5, ry) // 目录/ occupies 5 cells.
+	if text != "中" || width != 2 {
+		t.Fatalf("matched CJK cell = (%q, %d), want (中, 2)", text, width)
+	}
+	fg, _, _ := style.Decompose()
+	if fg != a.theme.FindCurrent {
+		t.Fatalf("matched CJK foreground = %v, want %v", fg, a.theme.FindCurrent)
+	}
+}

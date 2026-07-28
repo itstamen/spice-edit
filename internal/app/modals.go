@@ -21,6 +21,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/cloudmanic/spice-edit/internal/filetree"
+	"github.com/cloudmanic/spice-edit/internal/termtext"
 	"github.com/cloudmanic/spice-edit/internal/theme"
 )
 
@@ -217,15 +218,7 @@ func (a *App) handlePromptMouse(x, y int, btn tcell.ButtonMask) {
 		fieldStart := mx + 3
 		fieldEnd := mx + mw - 3
 		if x >= fieldStart && x < fieldEnd {
-			localCol := x - fieldStart
-			target := a.promptScroll + localCol
-			if target < 0 {
-				target = 0
-			}
-			if target > len(a.promptValue) {
-				target = len(a.promptValue)
-			}
-			a.promptCursor = target
+			a.promptCursor = textInputCursorAt(a.promptValue, a.promptScroll, x-fieldStart)
 		}
 	}
 }
@@ -275,12 +268,13 @@ func (a *App) drawPrompt() {
 	// Title divider.
 	drawHDivider(a.screen, mx, my+2, mw, borderStyle)
 
-	drawAt(a.screen, mx+1, my+1, " "+a.promptTitle, titleStyle)
+	titleWidth := mw - 2 - textWidth("esc ")
+	drawAtWidth(a.screen, mx+1, my+1, titleWidth, " "+a.promptTitle, titleStyle)
 	hint := "esc "
-	drawAt(a.screen, mx+mw-1-runeLen(hint), my+1, hint, mutedStyle)
+	drawAt(a.screen, mx+mw-1-textWidth(hint), my+1, hint, mutedStyle)
 
 	if a.promptHint != "" {
-		drawAt(a.screen, mx+2, my+3, a.promptHint, mutedStyle)
+		drawAtWidth(a.screen, mx+2, my+3, mw-4, a.promptHint, mutedStyle)
 	}
 
 	// Input field — a faint inset at row 4. We render the value with a
@@ -289,26 +283,12 @@ func (a *App) drawPrompt() {
 	fieldStart := mx + 3
 	fieldEnd := mx + mw - 3
 	fieldWidth := fieldEnd - fieldStart
-	a.adjustPromptScroll(fieldWidth)
-
 	inputBg := a.theme.BG
 	inputStyle := tcell.StyleDefault.Background(inputBg).Foreground(a.theme.Text)
 	for cx := fieldStart - 1; cx <= fieldEnd; cx++ {
 		a.screen.SetContent(cx, my+4, ' ', nil, inputStyle)
 	}
-	for i := 0; i < fieldWidth; i++ {
-		idx := a.promptScroll + i
-		if idx >= len(a.promptValue) {
-			break
-		}
-		a.screen.SetContent(fieldStart+i, my+4, a.promptValue[idx], nil, inputStyle)
-	}
-	// Place the screen cursor at the input position so the user sees a
-	// blinking caret like any other text field.
-	caret := fieldStart + (a.promptCursor - a.promptScroll)
-	if caret >= fieldStart && caret <= fieldEnd {
-		a.screen.ShowCursor(caret, my+4)
-	}
+	drawTextInput(a.screen, fieldStart, my+4, fieldWidth, a.promptValue, a.promptCursor, &a.promptScroll, inputStyle, true)
 
 	// Buttons — drawn at fixed columns matching the click rects in
 	// handlePromptMouse.
@@ -316,22 +296,10 @@ func (a *App) drawPrompt() {
 	drawButton(a.screen, mx+30, my+6, "[  OK  ]", bg, a.theme.Accent, true)
 }
 
-// adjustPromptScroll keeps the cursor within the visible window of the input
-// field by sliding promptScroll left or right as needed.
+// adjustPromptScroll remains as a focused unit-test seam while the shared
+// input renderer owns production drawing and scroll behavior.
 func (a *App) adjustPromptScroll(width int) {
-	if width <= 0 {
-		a.promptScroll = 0
-		return
-	}
-	if a.promptCursor < a.promptScroll {
-		a.promptScroll = a.promptCursor
-	}
-	if a.promptCursor >= a.promptScroll+width {
-		a.promptScroll = a.promptCursor - width + 1
-	}
-	if a.promptScroll < 0 {
-		a.promptScroll = 0
-	}
+	a.promptScroll = textInputScroll(string(a.promptValue), a.promptCursor, a.promptScroll, width)
 }
 
 // -----------------------------------------------------------------------------
@@ -583,9 +551,10 @@ func (a *App) drawConfirm() {
 	drawBorder(a.screen, mx, my, mw, mh, borderStyle)
 	drawHDivider(a.screen, mx, my+2, mw, borderStyle)
 
-	drawAt(a.screen, mx+1, my+1, " "+a.confirmTitle, titleStyle)
+	titleWidth := mw - 2 - textWidth("esc ")
+	drawAtWidth(a.screen, mx+1, my+1, titleWidth, " "+a.confirmTitle, titleStyle)
 	hint := "esc "
-	drawAt(a.screen, mx+mw-1-runeLen(hint), my+1, hint, mutedStyle)
+	drawAt(a.screen, mx+mw-1-textWidth(hint), my+1, hint, mutedStyle)
 
 	if a.confirmInfo {
 		// Info mode: left-aligned multi-line body + a single centered
@@ -599,9 +568,7 @@ func (a *App) drawConfirm() {
 			end = len(a.confirmMessageLines)
 		}
 		for i, line := range a.confirmMessageLines[a.confirmInfoScroll:end] {
-			if runeLen(line) > mw-4 {
-				line = string([]rune(line)[:mw-4])
-			}
+			line = termtext.Truncate(line, mw-4)
 			drawAt(a.screen, mx+2, my+3+i, line, confirmInfoLineStyle(a.theme, bg, line))
 		}
 		btnY := my + mh - 3
@@ -612,11 +579,8 @@ func (a *App) drawConfirm() {
 	}
 
 	// Message — centered, truncated if too long.
-	msg := a.confirmMessage
-	if runeLen(msg) > mw-4 {
-		msg = msg[:mw-4]
-	}
-	mxText := mx + (mw-runeLen(msg))/2
+	msg := termtext.Truncate(a.confirmMessage, mw-4)
+	mxText := mx + (mw-textWidth(msg))/2
 	drawAt(a.screen, mxText, my+4, msg, bodyStyle)
 
 	// Buttons. Default focus is No so an accidental Enter is non-destructive.
@@ -842,16 +806,14 @@ func (a *App) drawDirtyClose() {
 	drawBorder(a.screen, mx, my, mw, mh, borderStyle)
 	drawHDivider(a.screen, mx, my+2, mw, borderStyle)
 
-	drawAt(a.screen, mx+1, my+1, " "+a.dirtyTitle, titleStyle)
+	titleWidth := mw - 2 - textWidth("esc ")
+	drawAtWidth(a.screen, mx+1, my+1, titleWidth, " "+a.dirtyTitle, titleStyle)
 	hint := "esc "
-	drawAt(a.screen, mx+mw-1-runeLen(hint), my+1, hint, mutedStyle)
+	drawAt(a.screen, mx+mw-1-textWidth(hint), my+1, hint, mutedStyle)
 
 	// Message — centered, truncated if too long.
-	msg := a.dirtyMessage
-	if runeLen(msg) > mw-4 {
-		msg = msg[:mw-4]
-	}
-	mxText := mx + (mw-runeLen(msg))/2
+	msg := termtext.Truncate(a.dirtyMessage, mw-4)
+	mxText := mx + (mw-textWidth(msg))/2
 	drawAt(a.screen, mxText, my+4, msg, bodyStyle)
 
 	// Buttons. Cancel is neutral, Discard is red (destructive),
@@ -995,10 +957,10 @@ func (a *App) drawContext() {
 				a.screen.SetContent(cx, cy, ' ', nil, hoverStyle)
 			}
 			drawAt(a.screen, mx+2, cy, "▸", hoverChevStyle)
-			drawAt(a.screen, mx+4, cy, item.label, hoverStyle)
+			drawAtWidth(a.screen, mx+4, cy, mw-5, item.label, hoverStyle)
 		} else {
 			drawAt(a.screen, mx+2, cy, "▸", chevStyle)
-			drawAt(a.screen, mx+4, cy, item.label, bgStyle)
+			drawAtWidth(a.screen, mx+4, cy, mw-5, item.label, bgStyle)
 		}
 	}
 
@@ -1054,20 +1016,7 @@ func drawButton(scr tcell.Screen, x, y int, label string, modalBG tcell.Color, f
 		// Focused button: invert — the label sits on a tinted block.
 		st = tcell.StyleDefault.Background(fg).Foreground(modalBG).Bold(true)
 	}
-	col := 0
-	for _, r := range label {
-		scr.SetContent(x+col, y, r, nil, st)
-		col++
-	}
-}
-
-// runeLen returns the visible cell count of s (one cell per rune).
-func runeLen(s string) int {
-	n := 0
-	for range s {
-		n++
-	}
-	return n
+	termtext.DrawString(scr, x, y, termtext.StringWidth(label), label, st)
 }
 
 // trimSpace strips ASCII whitespace from both ends of s. Tiny dependency-free

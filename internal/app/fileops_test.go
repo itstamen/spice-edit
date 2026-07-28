@@ -472,7 +472,7 @@ func TestDeleteFolderLabel_DynamicSuffix(t *testing.T) {
 //
 // The interior budget is modalWidth minus the leading "▸ " indent
 // (drawn at mx+4) and one cell of right padding, so the constraint
-// is runeLen(label) <= modalWidth - 5.
+// is textWidth(label) <= modalWidth - 5.
 func TestDynamicLabels_FitInModal(t *testing.T) {
 	root := t.TempDir()
 	// Deliberately picks a folder name longer than what fit in the
@@ -494,9 +494,9 @@ func TestDynamicLabels_FitInModal(t *testing.T) {
 		{"renameFolderLabel", a.renameFolderLabel()},
 		{"deleteFolderLabel", a.deleteFolderLabel()},
 	} {
-		if runeLen(c.label) > maxFit {
+		if textWidth(c.label) > maxFit {
 			t.Errorf("%s = %q (%d runes) overflows modal interior (%d cells)",
-				c.name, c.label, runeLen(c.label), maxFit)
+				c.name, c.label, textWidth(c.label), maxFit)
 		}
 		// Sanity: label still mentions the folder so the user can tell
 		// what's about to be acted on. Truncation must not erase the
@@ -505,6 +505,18 @@ func TestDynamicLabels_FitInModal(t *testing.T) {
 			!strings.Contains(c.label, "thews.com") {
 			t.Errorf("%s = %q dropped the folder name entirely", c.name, c.label)
 		}
+	}
+}
+
+// TestFolderLabelSuffix_KeepsCJKClustersWhole verifies long action labels
+// retain useful CJK path tails without slicing a double-width glyph.
+func TestFolderLabelSuffix_KeepsCJKClustersWhole(t *testing.T) {
+	got := folderLabelSuffix(" (", "目录/中文测试", 10)
+	if textWidth(got) > 10 {
+		t.Fatalf("suffix = %q is %d cells, want <= 10", got, textWidth(got))
+	}
+	if !strings.Contains(got, "测试") {
+		t.Fatalf("suffix = %q should keep the folder tail", got)
 	}
 }
 

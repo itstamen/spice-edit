@@ -1755,10 +1755,10 @@ func TestDrawMenu_RightAlignsShortcuts(t *testing.T) {
 
 	mx, my, mw, _ := a.menuModalRect()
 	save := menuItemByLabel(t, a, "Save")
-	shortcutX := mx + mw - 2 - runeLen(save.shortcut)
+	shortcutX := mx + mw - 2 - textWidth(save.shortcut)
 	line := screenLine(a.screen.(tcell.SimulationScreen), my+save.relY)
 	lineRunes := []rune(line)
-	if got := string(lineRunes[shortcutX : shortcutX+runeLen(save.shortcut)]); got != save.shortcut {
+	if got := string(lineRunes[shortcutX : shortcutX+textWidth(save.shortcut)]); got != save.shortcut {
 		t.Fatalf("right shortcut = %q, want %q on line %q", got, save.shortcut, line)
 	}
 	if strings.Contains(string(lineRunes[mx+4:shortcutX-1]), save.shortcut) {
@@ -1766,9 +1766,9 @@ func TestDrawMenu_RightAlignsShortcuts(t *testing.T) {
 	}
 }
 
-// TestTrimRunes covers the menu-label clipping helper so long dynamic labels
+// TestTruncateText covers the menu-label clipping helper so long dynamic labels
 // cannot overwrite the right-aligned shortcut column.
-func TestTrimRunes(t *testing.T) {
+func TestTruncateText(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
@@ -1782,8 +1782,8 @@ func TestTrimRunes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := trimRunes(tt.in, tt.max); got != tt.want {
-				t.Fatalf("trimRunes(%q, %d) = %q, want %q", tt.in, tt.max, got, tt.want)
+			if got := truncateText(tt.in, tt.max); got != tt.want {
+				t.Fatalf("truncateText(%q, %d) = %q, want %q", tt.in, tt.max, got, tt.want)
 			}
 		})
 	}
@@ -2147,8 +2147,8 @@ func TestSplitErrorOutput_TruncatesAndAppendsLogPath(t *testing.T) {
 		t.Errorf("last line = %q, want actions.log pointer", last)
 	}
 	for _, ln := range body {
-		if runeLen(ln) > 80 {
-			t.Errorf("line over 80 cells: %q (len=%d)", ln, runeLen(ln))
+		if textWidth(ln) > 80 {
+			t.Errorf("line over 80 cells: %q (len=%d)", ln, textWidth(ln))
 		}
 	}
 	if !strings.Contains(strings.Join(body, "\n"), "truncated") {
@@ -2366,5 +2366,46 @@ func TestDrawTabBar_NoIconWhenDisabled(t *testing.T) {
 		if len(c.Runes) > 0 && c.Runes[0] == wantGlyph {
 			t.Fatalf("did not expect glyph %q at x=%d when icons off", string(wantGlyph), x)
 		}
+	}
+}
+
+// TestLayoutTabs_CJKNameUsesCellWidth verifies tab geometry reserves two
+// terminal cells for every CJK glyph in a display name.
+func TestLayoutTabs_CJKNameUsesCellWidth(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.tabs = []*editor.Tab{{Path: "中文.txt"}}
+	a.activeTab = 0
+
+	rects := a.layoutTabs()
+	if len(rects) != 1 {
+		t.Fatalf("tab rects = %d, want 1", len(rects))
+	}
+	if want := 1 + 2 + 8 + 1 + 1 + 1; rects[0].Width != want {
+		t.Fatalf("tab width = %d, want %d", rects[0].Width, want)
+	}
+
+	a.drawTabBar()
+	scr := a.screen.(tcell.SimulationScreen)
+	text, _, width := scr.Get(rects[0].X+3, 0)
+	if text != "中" || width != 2 {
+		t.Fatalf("first CJK tab cell = (%q, %d), want (中, 2)", text, width)
+	}
+	text, _, width = scr.Get(rects[0].X+5, 0)
+	if text != "文" || width != 2 {
+		t.Fatalf("second CJK tab cell = (%q, %d), want (文, 2)", text, width)
+	}
+}
+
+// TestDrawStatusBar_CJKBranchRightAligns ensures a wide branch name uses its
+// actual cell width when positioned at the status bar's right edge.
+func TestDrawStatusBar_CJKBranchRightAligns(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.gitBranch = "中文"
+	a.drawStatusBar()
+
+	sx, sy, sw, _ := a.statusRect()
+	text, _, width := a.screen.(tcell.SimulationScreen).Get(sx+sw-5, sy)
+	if text != "中" || width != 2 {
+		t.Fatalf("right-aligned branch cell = (%q, %d), want (中, 2)", text, width)
 	}
 }

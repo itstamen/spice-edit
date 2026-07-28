@@ -566,17 +566,18 @@ func TestContextActivate_OutOfRangeIsNoop(t *testing.T) {
 	a.contextActivate()
 }
 
-// TestRuneLen counts visible cells one-per-rune.
-func TestRuneLen(t *testing.T) {
+// TestTextWidth counts terminal display cells rather than Go runes.
+func TestTextWidth(t *testing.T) {
 	cases := map[string]int{
-		"":      0,
-		"abc":   3,
-		"héllo": 5, // five runes, one cell each by this helper's contract
-		"日本":    2,
+		"":        0,
+		"abc":     3,
+		"héllo":   5,
+		"日本":      4,
+		"e\u0301": 1,
 	}
 	for s, want := range cases {
-		if got := runeLen(s); got != want {
-			t.Errorf("runeLen(%q) = %d, want %d", s, got, want)
+		if got := textWidth(s); got != want {
+			t.Errorf("textWidth(%q) = %d, want %d", s, got, want)
 		}
 	}
 }
@@ -687,6 +688,18 @@ func TestHandlePromptMouse_FieldClickMovesCursor(t *testing.T) {
 	a.handlePromptMouse(mx+3+2, my+4, tcell.Button1)
 	if a.promptCursor != 2 {
 		t.Fatalf("field click: got %d, want 2", a.promptCursor)
+	}
+}
+
+// TestHandlePromptMouse_SecondCJKCellMovesToClusterStart confirms prompt
+// clicks use terminal cells and never land between a wide glyph's runes.
+func TestHandlePromptMouse_SecondCJKCellMovesToClusterStart(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.openPrompt("Name", "", "中a", nil)
+	mx, my, _, _ := a.promptModalRect()
+	a.handlePromptMouse(mx+3+1, my+4, tcell.Button1)
+	if a.promptCursor != 0 {
+		t.Fatalf("cursor = %d, want CJK cluster start 0", a.promptCursor)
 	}
 }
 

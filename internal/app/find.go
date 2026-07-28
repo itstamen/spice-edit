@@ -196,7 +196,7 @@ func (a *App) drawFindBar() {
 	// "Find:" label.
 	label := " Find: "
 	drawAt(a.screen, bx, by, label, labelStyle)
-	inputStart := bx + runeLen(label)
+	inputStart := bx + textWidth(label)
 
 	// Right side: counter + hint, drawn first so we can clip the input
 	// against them on a narrow window.
@@ -205,15 +205,15 @@ func (a *App) drawFindBar() {
 	rightPadding := 1
 	rightTextStart := bx + bw
 
-	if bw > runeLen(label)+runeLen(hint)+10 {
-		rightTextStart -= runeLen(hint) + rightPadding
+	if bw > textWidth(label)+textWidth(hint)+10 {
+		rightTextStart -= textWidth(hint) + rightPadding
 		drawAt(a.screen, rightTextStart, by, hint, mutedStyle)
 	}
-	if counter != "" && bw > runeLen(label)+runeLen(counter)+4 {
+	if counter != "" && bw > textWidth(label)+textWidth(counter)+4 {
 		// Only draw the counter when there's room; right-align before
 		// the hint (or against the bar's right edge if the hint was
 		// dropped).
-		rightTextStart -= runeLen(counter) + 2
+		rightTextStart -= textWidth(counter) + 2
 		// Color the counter red when the query has no matches so the
 		// user gets immediate negative feedback without having to read
 		// the digits.
@@ -234,21 +234,7 @@ func (a *App) drawFindBar() {
 	if inputWidth < 1 {
 		inputWidth = 1
 	}
-	a.adjustFindScroll(inputWidth)
-	for i := 0; i < inputWidth; i++ {
-		idx := a.findScroll + i
-		if idx >= len(a.findValue) {
-			break
-		}
-		a.screen.SetContent(inputStart+i, by, a.findValue[idx], nil, barStyle)
-	}
-
-	// Place the screen cursor at the input position so the user sees a
-	// blinking caret while typing in the bar.
-	caret := inputStart + (a.findCursor - a.findScroll)
-	if caret >= inputStart && caret <= inputEnd {
-		a.screen.ShowCursor(caret, by)
-	}
+	drawTextInput(a.screen, inputStart, by, inputWidth, a.findValue, a.findCursor, &a.findScroll, barStyle, true)
 }
 
 // findCounterText renders the "N of M" indicator. Returns "" when there
@@ -277,21 +263,8 @@ func (a *App) findHasNoMatches() bool {
 	return tab != nil && len(tab.FindMatches) == 0
 }
 
-// adjustFindScroll keeps the input cursor inside the visible window of
-// the input field, sliding the scroll offset left or right as needed.
-// Mirrors the prompt modal's adjustPromptScroll.
+// adjustFindScroll remains as a focused unit-test seam while the shared input
+// renderer owns production drawing and scroll behavior.
 func (a *App) adjustFindScroll(width int) {
-	if width <= 0 {
-		a.findScroll = 0
-		return
-	}
-	if a.findCursor < a.findScroll {
-		a.findScroll = a.findCursor
-	}
-	if a.findCursor >= a.findScroll+width {
-		a.findScroll = a.findCursor - width + 1
-	}
-	if a.findScroll < 0 {
-		a.findScroll = 0
-	}
+	a.findScroll = textInputScroll(string(a.findValue), a.findCursor, a.findScroll, width)
 }

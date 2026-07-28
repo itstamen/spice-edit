@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/cloudmanic/spice-edit/internal/format"
+	"github.com/cloudmanic/spice-edit/internal/termtext"
 	"github.com/gdamore/tcell/v2"
 )
 
@@ -339,9 +340,7 @@ func (a *App) execFormatter(tabPath string, argv []string) {
 				if i := indexNewline(preview); i >= 0 {
 					preview = preview[:i]
 				}
-				if len(preview) > 80 {
-					preview = preview[:80] + "…"
-				}
+				preview = termtext.Truncate(preview, 80)
 				err = fmt.Errorf("%v: %s", err, preview)
 			}
 		}

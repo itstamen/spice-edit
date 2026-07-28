@@ -52,6 +52,9 @@ The goals, in order:
   scroll wheel scrolls, double-click selects a word, drag past the edge
   to auto-scroll a selection.
 - **Syntax highlighting** for dozens of languages via Chroma.
+- **Correct CJK and Unicode layout** — Chinese, Japanese, Korean, and
+  combining characters use their terminal cell widths in file names, editor
+  content, menus, and prompts. Fixes [#39](https://github.com/cloudmanic/spice-edit/issues/39).
 - **Action menu** opened with the `≡` icon, right-click, or double-tap
   `Esc`. Keyboard navigation works too — arrow keys + `Enter`.
 - **Live file tree** — auto-refreshes every 10 seconds so files added

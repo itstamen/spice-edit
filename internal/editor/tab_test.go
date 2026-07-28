@@ -848,6 +848,76 @@ func TestTab_Render_ExpandsTabsToTabStops(t *testing.T) {
 	}
 }
 
+// TestTab_Render_CJKDoesNotOverwriteTrailingCells confirms a CJK glyph owns
+// two screen cells and leaves the next grapheme in its correct position.
+func TestTab_Render_CJKDoesNotOverwriteTrailingCells(t *testing.T) {
+	scr := newSimScreen(t, 40, 5)
+	defer scr.Fini()
+
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("中文测试")
+	tab.Render(scr, theme.Default(), 0, 0, 40, 5)
+
+	contentX := defaultGutterWidth + 1
+	text, _, width := scr.Get(contentX, 0)
+	if text != "中" || width != 2 {
+		t.Fatalf("first cell = (%q, %d), want (中, 2)", text, width)
+	}
+	text, _, width = scr.Get(contentX+2, 0)
+	if text != "文" || width != 2 {
+		t.Fatalf("third cell = (%q, %d), want (文, 2)", text, width)
+	}
+}
+
+// TestTab_HitTest_SecondCJKCellReturnsClusterStart covers mouse placement on
+// the continuation cell of a double-width grapheme.
+func TestTab_HitTest_SecondCJKCellReturnsClusterStart(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("中a")
+
+	contentX := defaultGutterWidth + 1
+	pos, ok := tab.HitTest(contentX+1, 0, 40, 10)
+	if !ok {
+		t.Fatal("expected CJK cell hit to be inside editor")
+	}
+	if pos.Col != 0 {
+		t.Fatalf("second CJK cell selected col %d, want 0", pos.Col)
+	}
+}
+
+// TestTab_Render_StylesWholeCombiningCluster keeps rune-indexed find and
+// selection state from painting only the invisible combining-mark portion of
+// a grapheme.
+func TestTab_Render_StylesWholeCombiningCluster(t *testing.T) {
+	scr := newSimScreen(t, 40, 5)
+	defer scr.Fini()
+
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("e\u0301")
+	tab.FindMatches = []Match{{Line: 0, Col: 1, Width: 1}}
+	tab.FindIndex = 0
+	tab.Render(scr, theme.Default(), 0, 0, 40, 5)
+
+	contentX := defaultGutterWidth + 1
+	_, style, _ := scr.Get(contentX, 0)
+	fg, bg, _ := style.Decompose()
+	if fg != theme.Default().BG || bg != theme.Default().FindCurrent {
+		t.Fatalf("find style = (fg=%v bg=%v), want current-find style", fg, bg)
+	}
+
+	tab.FindMatches = nil
+	tab.FindIndex = -1
+	tab.Anchor = Position{Line: 0, Col: 1}
+	tab.Cursor = Position{Line: 0, Col: 2}
+	tab.cursorMoved = false
+	tab.Render(scr, theme.Default(), 0, 0, 40, 5)
+	_, style, _ = scr.Get(contentX, 0)
+	_, bg, _ = style.Decompose()
+	if bg != theme.Default().Selection {
+		t.Fatalf("selection background = %v, want %v", bg, theme.Default().Selection)
+	}
+}
+
 // TestTab_HitTest_InsideTabSnapsToTab proves a click anywhere inside a
 // tab's 4-cell visual span returns the tab's rune column. Without this,
 // clicks would silently land on phantom positions where there's nothing

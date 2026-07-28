@@ -32,6 +32,7 @@ import (
 
 	"github.com/cloudmanic/spice-edit/internal/clipboard"
 	"github.com/cloudmanic/spice-edit/internal/filetree"
+	"github.com/cloudmanic/spice-edit/internal/termtext"
 )
 
 // -----------------------------------------------------------------------------
@@ -236,20 +237,7 @@ func (a *App) newFileLabel() string {
 	// maxLabelSuffix in app.go for why this is shared with the
 	// folder-rename / folder-delete labels.
 	const maxLen = maxLabelSuffix
-	suffix := " (in " + rel + ")"
-	if runeLen(suffix) > maxLen {
-		// Drop characters from the middle of rel so the trailing folder
-		// name (the most informative part) stays visible.
-		keep := maxLen - len(" (in …)")
-		if keep < 4 {
-			keep = 4
-		}
-		if keep < len(rel) {
-			rel = "…" + rel[len(rel)-keep:]
-		}
-		suffix = " (in " + rel + ")"
-	}
-	return "New file" + suffix
+	return "New file" + folderLabelSuffix(" (in ", rel, maxLen)
 }
 
 // relativeFolderLabel returns folder rendered relative to the project root,
@@ -399,18 +387,7 @@ func (a *App) renameFolderLabel() string {
 	}
 	rel := a.relativeFolderLabel(folder)
 	const maxLen = maxLabelSuffix
-	suffix := " (" + rel + ")"
-	if runeLen(suffix) > maxLen {
-		keep := maxLen - len(" (…)")
-		if keep < 4 {
-			keep = 4
-		}
-		if keep < len(rel) {
-			rel = "…" + rel[len(rel)-keep:]
-		}
-		suffix = " (" + rel + ")"
-	}
-	return "Rename folder" + suffix
+	return "Rename folder" + folderLabelSuffix(" (", rel, maxLen)
 }
 
 // menuDeleteFolder removes the editor's active folder (the same folder
@@ -459,18 +436,43 @@ func (a *App) deleteFolderLabel() string {
 	}
 	rel := a.relativeFolderLabel(folder)
 	const maxLen = maxLabelSuffix
-	suffix := " (" + rel + ")"
-	if runeLen(suffix) > maxLen {
-		keep := maxLen - len(" (…)")
-		if keep < 4 {
-			keep = 4
-		}
-		if keep < len(rel) {
-			rel = "…" + rel[len(rel)-keep:]
-		}
-		suffix = " (" + rel + ")"
+	return "Delete folder" + folderLabelSuffix(" (", rel, maxLen)
+}
+
+// folderLabelSuffix returns open+relative-folder+")" within maxCells. When
+// needed it keeps a whole-grapheme tail because the final folder name is the
+// most useful part of an action label.
+func folderLabelSuffix(open, rel string, maxCells int) string {
+	full := open + rel + ")"
+	if termtext.StringWidth(full) <= maxCells {
+		return full
 	}
-	return "Delete folder" + suffix
+	fixed := open + "…"
+	tailCells := maxCells - termtext.StringWidth(fixed+")")
+	if tailCells <= 0 {
+		return termtext.Truncate(full, maxCells)
+	}
+	return fixed + trailingCells(rel, tailCells) + ")"
+}
+
+// trailingCells returns the terminal-cell-aware tail of text that fits max.
+// It walks graphemes backwards so CJK and combining clusters remain intact.
+func trailingCells(text string, maxCells int) string {
+	if maxCells <= 0 {
+		return ""
+	}
+	clusters := termtext.Clusters(text)
+	used := 0
+	start := len([]rune(text))
+	for i := len(clusters) - 1; i >= 0; i-- {
+		cluster := clusters[i]
+		if used+cluster.Width > maxCells {
+			break
+		}
+		used += cluster.Width
+		start = cluster.StartRune
+	}
+	return string([]rune(text)[start:])
 }
 
 // hasActiveSubfolder is the menu predicate shared by every "act on
@@ -635,4 +637,3 @@ func ctxDelete(a *App, n *filetree.Node) {
 		app.doDeletePath(target)
 	})
 }
-

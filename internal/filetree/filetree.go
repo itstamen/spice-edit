@@ -21,6 +21,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/cloudmanic/spice-edit/internal/icons"
+	"github.com/cloudmanic/spice-edit/internal/termtext"
 	"github.com/cloudmanic/spice-edit/internal/theme"
 )
 
@@ -231,7 +232,7 @@ func (t *Tree) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	// folder, plain text otherwise — same visual rule the children
 	// rows follow, so the highlight is honest.
 	headerStyle := tcell.StyleDefault.Background(bg).Foreground(th.Muted).Bold(true)
-	drawString(scr, x, y, w, " EXPLORER", headerStyle)
+	termtext.DrawString(scr, x, y, w, " EXPLORER", headerStyle)
 	rootActive := t.ActiveFolder == "" || t.ActiveFolder == t.Root.Path
 	rootStyle := tcell.StyleDefault.Background(bg).Foreground(th.Text).Bold(true)
 	if rootActive {
@@ -240,7 +241,7 @@ func (t *Tree) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	if rootChange := t.DirtyFolders[t.Root.Path]; rootChange != GitChangeNone {
 		rootStyle = rootStyle.Foreground(gitChangeColor(th, rootChange))
 	}
-	drawString(scr, x, y+1, w, " "+t.Root.Name, rootStyle)
+	termtext.DrawString(scr, x, y+1, w, " "+t.Root.Name, rootStyle)
 
 	// Build the flat list of visible rows from the root's children.
 	flat := make([]flatNode, 0, 128)
@@ -349,7 +350,7 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 	}
 
 	if !withIcons {
-		drawString(scr, x, y, w, prefix+suffix, rowStyle)
+		termtext.DrawString(scr, x, y, w, prefix+suffix, rowStyle)
 		return
 	}
 
@@ -363,11 +364,9 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 		glyphStyle = glyphStyle.Bold(true)
 	}
 
-	drawString(scr, x, y, w, prefix, rowStyle)
-	px := len([]rune(prefix))
-	drawString(scr, x+px, y, w-px, glyph, glyphStyle)
-	gx := len([]rune(glyph))
-	drawString(scr, x+px+gx, y, w-px-gx, "  "+suffix, rowStyle)
+	prefixWidth := termtext.DrawString(scr, x, y, w, prefix, rowStyle)
+	glyphWidth := termtext.DrawString(scr, x+prefixWidth, y, w-prefixWidth, glyph, glyphStyle)
+	termtext.DrawString(scr, x+prefixWidth+glyphWidth, y, w-prefixWidth-glyphWidth, "  "+suffix, rowStyle)
 }
 
 // gitChangeColor maps git status kinds to the tree row foreground.
@@ -385,19 +384,6 @@ func gitChangeColor(th theme.Theme, change GitChangeKind) tcell.Color {
 		return th.GitModified
 	}
 	return th.FileColor
-}
-
-// drawString writes s left-aligned within [x, x+w). Excess content is
-// truncated; short content is implicitly padded by the row's pre-painted bg.
-func drawString(scr tcell.Screen, x, y, w int, s string, st tcell.Style) {
-	col := 0
-	for _, r := range s {
-		if col >= w {
-			return
-		}
-		scr.SetContent(x+col, y, r, nil, st)
-		col++
-	}
 }
 
 // clampScroll keeps ScrollY within bounds for the current visible-row count.
