@@ -18,6 +18,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -34,6 +35,7 @@ import (
 	"github.com/cloudmanic/spice-edit/internal/finder"
 	"github.com/cloudmanic/spice-edit/internal/icons"
 	"github.com/cloudmanic/spice-edit/internal/spiceconfig"
+	"github.com/cloudmanic/spice-edit/internal/termgraphics"
 	"github.com/cloudmanic/spice-edit/internal/termtext"
 	"github.com/cloudmanic/spice-edit/internal/theme"
 	"github.com/cloudmanic/spice-edit/internal/version"
@@ -97,6 +99,12 @@ const (
 	autoScrollTick = 60 * time.Millisecond
 )
 
+// osEnv adapts the process environment to termgraphics.Environment.
+type osEnv struct{}
+
+// Getenv returns one process environment value.
+func (osEnv) Getenv(key string) string { return os.Getenv(key) }
+
 // autoScrollEvent is the custom tcell event our auto-scroll goroutine
 // posts at autoScrollTick intervals while the user is drag-selecting past
 // the top or bottom edge of the editor pane.
@@ -137,6 +145,16 @@ type tabRect struct {
 	Index    int
 	X, Width int
 	CloseX   int // Cell column of the × close button.
+}
+
+// imageViewKey identifies one fitted graphics image view. A resized terminal
+// produces a distinct key so a payload fallback can be retried at the new
+// target size.
+type imageViewKey struct {
+	ID          uint64
+	Revision    uint64
+	PixelWidth  int
+	PixelHeight int
 }
 
 // clickRecord tracks the last mouse-press location and time so we can
@@ -315,6 +333,26 @@ func (a *App) hasTree() bool {
 type App struct {
 	screen tcell.Screen
 	theme  theme.Theme
+
+	// graphics owns the terminal-specific image layer. It is deliberately
+	// separate from tcell's cell buffer, which remains responsible for the
+	// universal half-block fallback.
+	graphics             termgraphics.Presenter
+	showFrame            func()
+	graphicsDisabled     bool
+	graphicsFallback     map[imageViewKey]struct{}
+	graphicsHinted       bool
+	payloadHints         map[imageViewKey]struct{}
+	graphicsVisible      bool
+	graphicsView         imageViewKey
+	hasGraphicsView      bool
+	graphicsPlacement    termgraphics.Placement
+	hasGraphicsPlacement bool
+	graphicsRect         termgraphics.CellRect
+	graphicsCells        termgraphics.CellPixels
+	hasGraphicsGeometry  bool
+	graphicsUsesTTY      bool
+	graphicsTTY          tcell.Tty
 
 	rootDir   string
 	tree      *filetree.Tree
@@ -510,6 +548,8 @@ func New(rootDir string) (*App, error) {
 		sidebarShown:   true,
 		sidebarWidth:   defaultSidebarWidth,
 	}
+	a.showFrame = a.screen.Show
+	a.initializeImageGraphics()
 	a.setActiveFolder(tree.Root.Path)
 	a.loadSpiceConfig()
 	a.refreshGitStatus()
@@ -569,6 +609,8 @@ func NewSingleFile(filePath string) (*App, error) {
 		sidebarShown:   false,
 		sidebarWidth:   defaultSidebarWidth,
 	}
+	a.showFrame = a.screen.Show
+	a.initializeImageGraphics()
 	a.setActiveFolder(rootDir)
 	a.loadSpiceConfig()
 	a.loadCustomActions()
@@ -699,6 +741,7 @@ func (a *App) stopTreeRefresh() {
 func (a *App) Close() {
 	a.stopTreeRefresh()
 	a.stopAutoScroll()
+	a.clearImageGraphics()
 	if a.screen != nil {
 		a.screen.Fini()
 	}
@@ -708,8 +751,7 @@ func (a *App) Close() {
 // each event, redraws, and exits when a.quit is set.
 func (a *App) Run() error {
 	a.width, a.height = a.screen.Size()
-	a.draw()
-	a.screen.Show()
+	a.flushFrame()
 
 	for !a.quit {
 		ev := a.screen.PollEvent()
@@ -717,10 +759,271 @@ func (a *App) Run() error {
 			break
 		}
 		a.handleEvent(ev)
-		a.draw()
-		a.screen.Show()
+		a.flushFrame()
 	}
 	return nil
+}
+
+// initializeImageGraphics selects the one supported graphics presenter for
+// this session. Herdr is preferred because its pane adapter owns presentation
+// inside the multiplexer; direct KGP requires a real tcell TTY with pixels.
+func (a *App) initializeImageGraphics() {
+	if a == nil || a.screen == nil {
+		return
+	}
+	if termgraphics.IsHerdr(osEnv{}) {
+		a.graphics = termgraphics.NewHerdrPresenter(
+			os.Getenv("HERDR_SOCKET_PATH"),
+			os.Getenv("HERDR_PANE_ID"),
+			nil,
+		)
+		return
+	}
+	if !termgraphics.SupportsKitty(osEnv{}) {
+		return
+	}
+
+	tty, ok := a.screen.Tty()
+	if !ok || tty == nil {
+		return
+	}
+	window, err := tty.WindowSize()
+	if err != nil {
+		return
+	}
+	if window.Width <= 0 || window.Height <= 0 {
+		return
+	}
+	cellWidth, cellHeight := window.CellDimensions()
+	if cellWidth <= 0 || cellHeight <= 0 {
+		return
+	}
+
+	a.graphics = termgraphics.NewKittyPresenter(tty)
+	a.graphicsUsesTTY = true
+	a.graphicsTTY = tty
+}
+
+// flushFrame completes one visual frame, then synchronizes terminal graphics
+// only after tcell made the cell buffer visible. A graphics failure redraws
+// the same frame with the half-block fallback before returning to the loop.
+func (a *App) flushFrame() {
+	a.draw()
+	a.showCurrentFrame()
+	if a.syncImageGraphics() {
+		a.draw()
+		a.showCurrentFrame()
+	}
+}
+
+// showCurrentFrame invokes the testable frame-flush seam or falls back to the
+// screen directly for Apps assembled by older helpers.
+func (a *App) showCurrentFrame() {
+	if a.showFrame != nil {
+		a.showFrame()
+		return
+	}
+	if a.screen != nil {
+		a.screen.Show()
+	}
+}
+
+// syncImageGraphics presents the currently visible image, or clears an old
+// placement once that image is no longer eligible for terminal graphics.
+// It reports whether the tcell frame must be redrawn as a half-block fallback.
+func (a *App) syncImageGraphics() bool {
+	request, visible := a.visibleImageRequest()
+	if !visible {
+		return a.clearImageGraphics()
+	}
+
+	placement, ok := termgraphics.Fit(request.Image.Source, request.Rect, request.Cells)
+	if !ok {
+		return a.clearImageGraphics()
+	}
+	key := imageViewKeyFromPlacement(request, placement)
+	if a.graphicsVisible && (!a.hasGraphicsView || a.graphicsView != key ||
+		!a.hasGraphicsPlacement || a.graphicsPlacement != placement ||
+		!a.hasGraphicsGeometry || a.graphicsRect != request.Rect || a.graphicsCells != request.Cells) {
+		if a.clearImageGraphics() {
+			return true
+		}
+		if a.graphicsDisabled {
+			return true
+		}
+	}
+
+	if err := a.graphics.Present(request); err != nil {
+		if errors.Is(err, termgraphics.ErrPayloadTooLarge) {
+			if a.graphicsFallback == nil {
+				a.graphicsFallback = make(map[imageViewKey]struct{})
+			}
+			a.graphicsFallback[key] = struct{}{}
+			a.flashPayloadFallbackOnce(key)
+			if a.graphicsVisible {
+				a.clearImageGraphics()
+			}
+			return true
+		}
+		a.disableImageGraphics(err)
+		return true
+	}
+
+	a.graphicsVisible = true
+	a.graphicsView = key
+	a.hasGraphicsView = true
+	a.graphicsPlacement = placement
+	a.hasGraphicsPlacement = true
+	a.graphicsRect = request.Rect
+	a.graphicsCells = request.Cells
+	a.hasGraphicsGeometry = true
+	return false
+}
+
+// visibleImageRequest returns the active image only when it can be rendered
+// behind a fully visible tcell frame. Overlays and invalid terminal geometry
+// intentionally use the universal half-block renderer instead.
+func (a *App) visibleImageRequest() (termgraphics.Request, bool) {
+	if a == nil || a.graphics == nil || a.graphicsDisabled ||
+		a.width < minWidth || a.height < minHeight ||
+		a.anyModalOpen() || a.findOpen {
+		return termgraphics.Request{}, false
+	}
+
+	tab := a.activeTabPtr()
+	if tab == nil {
+		return termgraphics.Request{}, false
+	}
+	view, ok := tab.ImageView()
+	if !ok {
+		return termgraphics.Request{}, false
+	}
+
+	x, y, cols, rows := a.editorRect()
+	if cols <= 0 || rows <= 0 {
+		return termgraphics.Request{}, false
+	}
+
+	cells := termgraphics.CellPixels{Width: 1, Height: 1}
+	if a.graphicsUsesTTY {
+		if a.graphicsTTY == nil {
+			return termgraphics.Request{}, false
+		}
+		window, err := a.graphicsTTY.WindowSize()
+		if err != nil {
+			return termgraphics.Request{}, false
+		}
+		if window.Width <= 0 || window.Height <= 0 {
+			return termgraphics.Request{}, false
+		}
+		cellWidth, cellHeight := window.CellDimensions()
+		if cellWidth <= 0 || cellHeight <= 0 {
+			return termgraphics.Request{}, false
+		}
+		cells = termgraphics.CellPixels{Width: cellWidth, Height: cellHeight}
+	}
+
+	request := termgraphics.Request{
+		Image: termgraphics.Image{
+			ID:       view.ID,
+			Revision: view.Revision,
+			Source:   view.Image,
+		},
+		Rect:  termgraphics.CellRect{X: x, Y: y, Cols: cols, Rows: rows},
+		Cells: cells,
+	}
+	key, ok := imageViewKeyFrom(request)
+	if !ok {
+		return termgraphics.Request{}, false
+	}
+	if _, fallback := a.graphicsFallback[key]; fallback {
+		return termgraphics.Request{}, false
+	}
+	return request, true
+}
+
+// imageViewKeyFrom derives the per-view fallback key from the exact physical
+// geometry the presenter will use for its fitted image.
+func imageViewKeyFrom(request termgraphics.Request) (imageViewKey, bool) {
+	placement, ok := termgraphics.Fit(request.Image.Source, request.Rect, request.Cells)
+	if !ok {
+		return imageViewKey{}, false
+	}
+	return imageViewKeyFromPlacement(request, placement), true
+}
+
+// imageViewKeyFromPlacement builds a per-view fallback key after Fit already
+// supplied the precise target pixel dimensions for request.
+func imageViewKeyFromPlacement(request termgraphics.Request, placement termgraphics.Placement) imageViewKey {
+	return imageViewKey{
+		ID:          request.Image.ID,
+		Revision:    request.Image.Revision,
+		PixelWidth:  placement.PixelWidth,
+		PixelHeight: placement.PixelHeight,
+	}
+}
+
+// clearImageGraphics removes an active placement after its tcell replacement
+// frame is visible. A failed clear disables the session so no later protocol
+// output can race an uncertain terminal state.
+func (a *App) clearImageGraphics() bool {
+	if a == nil || a.graphics == nil || !a.graphicsVisible {
+		return false
+	}
+	if err := a.graphics.Clear(); err != nil {
+		a.disableImageGraphics(err)
+		return false
+	}
+	a.graphicsVisible = false
+	a.graphicsView = imageViewKey{}
+	a.hasGraphicsView = false
+	a.graphicsPlacement = termgraphics.Placement{}
+	a.hasGraphicsPlacement = false
+	a.graphicsRect = termgraphics.CellRect{}
+	a.graphicsCells = termgraphics.CellPixels{}
+	a.hasGraphicsGeometry = false
+	return false
+}
+
+// disableImageGraphics stops all future presenter calls and flashes one
+// actionable session-level fallback message.
+func (a *App) disableImageGraphics(err error) {
+	if a == nil || a.graphicsDisabled {
+		return
+	}
+	a.graphicsDisabled = true
+	a.graphicsVisible = false
+	a.graphicsView = imageViewKey{}
+	a.hasGraphicsView = false
+	a.graphicsPlacement = termgraphics.Placement{}
+	a.hasGraphicsPlacement = false
+	a.graphicsRect = termgraphics.CellRect{}
+	a.graphicsCells = termgraphics.CellPixels{}
+	a.hasGraphicsGeometry = false
+	a.graphics = nil
+	a.graphicsTTY = nil
+	if a.graphicsHinted {
+		return
+	}
+	a.graphicsHinted = true
+	if errors.Is(err, termgraphics.ErrFeatureDisabled) {
+		a.flash("Herdr graphics disabled — add [experimental] kitty_graphics = true, run herdr server reload-config, then restart Herdr if needed.")
+		return
+	}
+	a.flash("Image graphics unavailable — using block preview.")
+}
+
+// flashPayloadFallbackOnce reports an oversized image only once for the
+// precise image revision and target geometry that needs block rendering.
+func (a *App) flashPayloadFallbackOnce(key imageViewKey) {
+	if a.payloadHints == nil {
+		a.payloadHints = make(map[imageViewKey]struct{})
+	}
+	if _, flashed := a.payloadHints[key]; flashed {
+		return
+	}
+	a.payloadHints[key] = struct{}{}
+	a.flash("Image too large for graphics — using block preview.")
 }
 
 // handleEvent routes a tcell event to its specific handler.
@@ -2275,7 +2578,15 @@ func (a *App) draw() {
 
 	if tab := a.activeTabPtr(); tab != nil {
 		ex, ey, ew, eh := a.editorRect()
-		tab.Render(a.screen, a.theme, ex, ey, ew, eh)
+		if tab.IsImage() {
+			if _, visible := a.visibleImageRequest(); visible {
+				tab.RenderImageBackground(a.screen, a.theme, ex, ey, ew, eh)
+			} else {
+				tab.Render(a.screen, a.theme, ex, ey, ew, eh)
+			}
+		} else {
+			tab.Render(a.screen, a.theme, ex, ey, ew, eh)
+		}
 	} else {
 		a.drawEmptyEditor()
 	}

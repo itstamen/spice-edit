@@ -22,9 +22,9 @@
 //      output is just SGR truecolor escapes, the same colour codes the
 //      editor already uses everywhere else.
 //
-// We use a nearest-neighbour scaler because it's small, dependency-free,
-// and good enough for a preview. Bilinear / Lanczos would look slightly
-// nicer but pull in golang.org/x/image; not worth it for V1.
+// We use a shared nearest-neighbour scaler because it's small,
+// dependency-free, and good enough for a preview. Bilinear / Lanczos would
+// look slightly nicer but pull in golang.org/x/image; not worth it for V1.
 
 package editor
 
@@ -37,9 +37,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/cloudmanic/spice-edit/internal/imageutil"
 	"github.com/cloudmanic/spice-edit/internal/theme"
 )
 
@@ -51,6 +53,26 @@ const imageMode = "image"
 // upperHalfBlock is the Unicode glyph used for half-block rendering.
 // Foreground = top pixel, background = bottom pixel.
 const upperHalfBlock = '▀'
+
+// nextImageID allocates stable, non-zero identities for image tabs.
+var nextImageID atomic.Uint64
+
+// ImageView is an immutable identity, revision, and image snapshot for a
+// terminal graphics presenter.
+type ImageView struct {
+	ID       uint64
+	Revision uint64
+	Image    image.Image
+}
+
+// allocateImageID returns the next stable non-zero image tab identity.
+func allocateImageID() uint64 {
+	for {
+		if id := nextImageID.Add(1); id != 0 {
+			return id
+		}
+	}
+}
 
 // isImageExt reports whether path's extension is one we know how to
 // decode. Case-insensitive so "FOO.PNG" works the same as "foo.png".
@@ -77,30 +99,6 @@ func decodeImageFile(path string) (image.Image, string, error) {
 		return nil, "", fmt.Errorf("decode %s: %w", filepath.Base(path), err)
 	}
 	return img, format, nil
-}
-
-// resizeNearest produces a w×h RGBA copy of src using nearest-neighbour
-// sampling. Returns nil for non-positive sizes so callers don't have
-// to special-case a zero-area target.
-func resizeNearest(src image.Image, w, h int) *image.RGBA {
-	if w <= 0 || h <= 0 || src == nil {
-		return nil
-	}
-	dst := image.NewRGBA(image.Rect(0, 0, w, h))
-	sb := src.Bounds()
-	sw := sb.Dx()
-	sh := sb.Dy()
-	if sw == 0 || sh == 0 {
-		return dst
-	}
-	for y := 0; y < h; y++ {
-		sy := y * sh / h
-		for x := 0; x < w; x++ {
-			sx := x * sw / w
-			dst.Set(x, y, src.At(sb.Min.X+sx, sb.Min.Y+sy))
-		}
-	}
-	return dst
 }
 
 // halfblockRender draws img into the cell rectangle (x, y, w, h),
@@ -134,7 +132,7 @@ func halfblockRender(scr tcell.Screen, x, y, w, h int, img image.Image) {
 	offX := x + (w-cellsW)/2
 	offY := y + (h-cellsH)/2
 
-	resized := resizeNearest(img, pxW, pxH)
+	resized := imageutil.ResizeNearest(img, pxW, pxH)
 	if resized == nil {
 		return
 	}
@@ -190,17 +188,21 @@ func halfblockFitSize(srcW, srcH, cellW, cellH int) (int, int) {
 	return pxW, pxH
 }
 
-// renderImage paints the image tab. Called from Tab.Render when
-// Mode == imageMode. The viewport is filled with the editor background
-// colour first so blank cells around a small / non-square image still
-// look themed.
-func (t *Tab) renderImage(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
+// RenderImageBackground fills the image viewport with the themed canvas and
+// hides the text cursor without rendering fallback image cells.
+func (t *Tab) RenderImageBackground(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	bgStyle := tcell.StyleDefault.Background(th.BG)
 	for cy := y; cy < y+h; cy++ {
 		for cx := x; cx < x+w; cx++ {
 			scr.SetContent(cx, cy, ' ', nil, bgStyle)
 		}
 	}
-	halfblockRender(scr, x, y, w, h, t.Image)
 	scr.HideCursor()
+}
+
+// RenderImageFallback draws the themed canvas and the half-block image
+// fallback for terminals without an active graphics presenter.
+func (t *Tab) RenderImageFallback(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
+	t.RenderImageBackground(scr, th, x, y, w, h)
+	halfblockRender(scr, x, y, w, h, t.Image)
 }

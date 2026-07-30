@@ -49,6 +49,7 @@ func newTestApp(t *testing.T, root string) *App {
 	}
 	a := &App{
 		screen:         scr,
+		showFrame:      scr.Show,
 		theme:          theme.Default(),
 		rootDir:        tree.Root.Path,
 		tree:           tree,

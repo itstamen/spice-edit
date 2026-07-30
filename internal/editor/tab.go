@@ -107,10 +107,16 @@ type Tab struct {
 	// read-only image preview. Image tabs reuse the Tab type so the
 	// app's tab list, switcher, and modal-routing all just work — the
 	// content-mutating methods short-circuit on imageMode and Render
-	// delegates to renderImage. See image.go for the render path.
+	// delegates to RenderImageFallback. See image.go for the render path.
 	Mode     string
 	Image    image.Image // populated when Mode == imageMode
 	ImageFmt string      // "png" / "jpeg" / "gif" — for the status bar
+
+	// imageID remains stable for the lifetime of an image tab, while
+	// imageRevision changes after each successful image reload. They remain
+	// private so graphics consumers must use the immutable ImageView snapshot.
+	imageID       uint64
+	imageRevision uint64
 
 	// Find state — populated when the user opens the find bar and
 	// types a query. The UI layer (App) owns the bar geometry and
@@ -179,12 +185,14 @@ func newImageTab(path string) (*Tab, error) {
 		mtime = info.ModTime()
 	}
 	t := &Tab{
-		Path:     path,
-		Buffer:   NewBuffer(""),
-		Mtime:    mtime,
-		Mode:     imageMode,
-		Image:    img,
-		ImageFmt: format,
+		Path:          path,
+		Buffer:        NewBuffer(""),
+		Mtime:         mtime,
+		Mode:          imageMode,
+		Image:         img,
+		ImageFmt:      format,
+		imageID:       allocateImageID(),
+		imageRevision: 1,
 	}
 	// Capture the empty original snapshot so CanRevert / RevertFile
 	// behave sensibly even though image tabs are read-only — they'll
@@ -198,6 +206,19 @@ func newImageTab(path string) (*Tab, error) {
 // dispatch, save, etc.) without having to know about Mode strings.
 func (t *Tab) IsImage() bool {
 	return t.Mode == imageMode
+}
+
+// ImageView returns a read-only identity, revision, and image snapshot for a
+// graphics presenter. Non-image or incomplete image tabs do not have a view.
+func (t *Tab) ImageView() (ImageView, bool) {
+	if t == nil || !t.IsImage() || t.Image == nil {
+		return ImageView{}, false
+	}
+	return ImageView{
+		ID:       t.imageID,
+		Revision: t.imageRevision,
+		Image:    t.Image,
+	}, true
 }
 
 // DisplayName returns the basename of Path, or "untitled" for unsaved tabs.
@@ -256,6 +277,7 @@ func (t *Tab) Reload() error {
 		}
 		t.Image = img
 		t.ImageFmt = format
+		t.imageRevision++
 		t.Mtime = info.ModTime()
 		t.DiskGone = false
 		return nil
@@ -548,10 +570,10 @@ func (t *Tab) EnsureVisible(viewW, viewH int) {
 
 // Render draws the editor's content (line numbers, code with syntax
 // highlighting, selection, cursor) into the rectangle (x, y, w, h).
-// Image tabs delegate to renderImage instead of drawing text.
+// Image tabs delegate to RenderImageFallback instead of drawing text.
 func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	if t.IsImage() {
-		t.renderImage(scr, th, x, y, w, h)
+		t.RenderImageFallback(scr, th, x, y, w, h)
 		return
 	}
 	// Only re-center on the cursor if the cursor moved this tick. Doing it

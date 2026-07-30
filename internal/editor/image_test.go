@@ -118,52 +118,14 @@ func TestDecodeImageFile_Errors(t *testing.T) {
 	}
 }
 
-// TestResizeNearest_DoublesAndHalves checks the two most common
-// scale paths — upsample 2× and downsample 2× — and verifies the
-// produced bounds match the requested size.
-func TestResizeNearest_DoublesAndHalves(t *testing.T) {
-	src := makeGradient(4, 4)
-
-	up := resizeNearest(src, 8, 8)
-	if up.Bounds().Dx() != 8 || up.Bounds().Dy() != 8 {
-		t.Fatalf("upsample bounds = %v", up.Bounds())
-	}
-	// Top-left pixel should equal the source's top-left pixel.
-	wantR, wantG, wantB, _ := src.At(0, 0).RGBA()
-	r, g, b, _ := up.At(0, 0).RGBA()
-	if r != wantR || g != wantG || b != wantB {
-		t.Errorf("up(0,0) = %d,%d,%d, want %d,%d,%d", r, g, b, wantR, wantG, wantB)
-	}
-
-	down := resizeNearest(src, 2, 2)
-	if down.Bounds().Dx() != 2 || down.Bounds().Dy() != 2 {
-		t.Fatalf("downsample bounds = %v", down.Bounds())
-	}
-}
-
-// TestResizeNearest_ZeroOrNilHandled returns nil for non-positive
-// sizes and for a nil source — defensive so callers don't have to
-// special-case.
-func TestResizeNearest_ZeroOrNilHandled(t *testing.T) {
-	if resizeNearest(nil, 4, 4) != nil {
-		t.Error("nil src should yield nil")
-	}
-	if resizeNearest(makeGradient(2, 2), 0, 4) != nil {
-		t.Error("zero w should yield nil")
-	}
-	if resizeNearest(makeGradient(2, 2), 4, -1) != nil {
-		t.Error("negative h should yield nil")
-	}
-}
-
 // TestHalfblockFitSize_PreservesAspect drives the fitting math through
 // the four interesting cases: same aspect, source-wider, source-taller,
 // and a degenerate zero-size cell rect.
 func TestHalfblockFitSize_PreservesAspect(t *testing.T) {
 	cases := []struct {
-		name                       string
-		srcW, srcH, cellW, cellH   int
-		wantPxW, wantPxH           int
+		name                     string
+		srcW, srcH, cellW, cellH int
+		wantPxW, wantPxH         int
 	}{
 		// 100x100 image into 50x50 cells. Cells give 50px wide × 100px
 		// tall; scaling preserves the source's 1:1 pixel aspect, so the
@@ -256,10 +218,10 @@ func TestHalfblockRender_IgnoresZeroSizedRects(t *testing.T) {
 	halfblockRender(scr, 0, 0, 5, 5, image.NewRGBA(image.Rect(0, 0, 0, 0)))
 }
 
-// TestRenderImage_FillsBackground confirms that Tab.renderImage paints
-// the editor background everywhere first so empty cells around a
+// TestRenderImageFallbackFillsBackground confirms that RenderImageFallback
+// paints the editor background everywhere first so empty cells around a
 // non-square image still match the editor theme.
-func TestRenderImage_FillsBackground(t *testing.T) {
+func TestRenderImageFallbackFillsBackground(t *testing.T) {
 	tab := &Tab{Mode: imageMode}
 	// Use a very wide aspect (4×1) so the half-block render is width-bound
 	// and leaves vertical padding rows around it inside the 10×5 viewport.
@@ -278,7 +240,7 @@ func TestRenderImage_FillsBackground(t *testing.T) {
 
 	// Reach for the full-fat default theme so background colour assertions
 	// match what a real run would produce.
-	tab.renderImage(scr, theme.Default(), 0, 0, 10, 5)
+	tab.RenderImageFallback(scr, theme.Default(), 0, 0, 10, 5)
 	scr.Show()
 
 	cells, w, _ := scr.GetContents()
@@ -302,6 +264,24 @@ func TestRenderImage_FillsBackground(t *testing.T) {
 	}
 	if !foundPad {
 		t.Fatal("expected at least one bg-padded cell around a 4x1 image")
+	}
+}
+
+// TestRenderImageBackgroundDoesNotPaintHalfBlocks ensures graphics
+// presenters can reuse the themed canvas without leaving fallback glyphs.
+func TestRenderImageBackgroundDoesNotPaintHalfBlocks(t *testing.T) {
+	tab := &Tab{Mode: imageMode, Image: image.NewRGBA(image.Rect(0, 0, 2, 2))}
+	scr := newSimScreen(t, 8, 4)
+	defer scr.Fini()
+
+	tab.RenderImageBackground(scr, theme.Default(), 0, 0, 8, 4)
+	scr.Show()
+
+	cells, _, _ := scr.GetContents()
+	for _, cell := range cells {
+		if len(cell.Runes) != 0 && cell.Runes[0] == upperHalfBlock {
+			t.Fatal("background-only render emitted half block")
+		}
 	}
 }
 
@@ -351,4 +331,3 @@ func writeJPEG(t *testing.T, path string, img image.Image) {
 		t.Fatalf("write: %v", err)
 	}
 }
-

@@ -14,6 +14,7 @@
 package editor
 
 import (
+	"image"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -92,6 +93,62 @@ func TestNewTab_EmptyPath(t *testing.T) {
 	}
 	if tab.DisplayName() != "untitled" {
 		t.Fatalf("expected 'untitled', got %q", tab.DisplayName())
+	}
+}
+
+// TestTabImageViewRevisionChangesOnlyAfterSuccessfulReload keeps graphics
+// presenters from treating a failed disk decode as a new image revision.
+func TestTabImageViewRevisionChangesOnlyAfterSuccessfulReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preview.png")
+	writePNG(t, path, image.NewRGBA(image.Rect(0, 0, 2, 2)))
+
+	tab, err := NewTab(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, ok := tab.ImageView()
+	if !ok {
+		t.Fatal("expected image view")
+	}
+	if before.ID == 0 {
+		t.Fatal("image view ID must be non-zero")
+	}
+	if err := os.WriteFile(path, []byte("not an image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := tab.Reload(); err == nil {
+		t.Fatal("expected decode error")
+	}
+	afterFailure, ok := tab.ImageView()
+	if !ok {
+		t.Fatal("expected image view after failed reload")
+	}
+	if afterFailure.ID != before.ID {
+		t.Fatal("failed reload changed image ID")
+	}
+	if afterFailure.Revision != before.Revision {
+		t.Fatal("failed reload changed revision")
+	}
+	if afterFailure.Image != before.Image {
+		t.Fatal("failed reload changed image")
+	}
+
+	writePNG(t, path, image.NewRGBA(image.Rect(0, 0, 3, 2)))
+	if err := tab.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	afterSuccess, ok := tab.ImageView()
+	if !ok {
+		t.Fatal("expected image view after successful reload")
+	}
+	if afterSuccess.ID != before.ID {
+		t.Fatal("successful reload changed image ID")
+	}
+	if afterSuccess.Revision != before.Revision+1 {
+		t.Fatalf("revision = %d, want %d", afterSuccess.Revision, before.Revision+1)
+	}
+	if afterSuccess.Image == before.Image {
+		t.Fatal("successful reload did not replace image")
 	}
 }
 

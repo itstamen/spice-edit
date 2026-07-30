@@ -62,9 +62,24 @@ The finder index refreshes every 10 seconds and immediately after any create / r
 
 SpiceEdit assumes 24-bit truecolor. Most modern terminals support it, but some older ones default to 256-color mode. Check `tput colors` — anything less than `16777216` means truecolor isn't on. Set `COLORTERM=truecolor` in your shell rc and reconnect.
 
-## The image preview is blocky
+## Image previews use blocks instead of terminal graphics
 
-Image preview uses the half-block technique — every cell is `▀` with a top color and a bottom color, giving you two vertical pixels per character cell. That's the trade for a renderer that works in *every* truecolor-capable terminal (including macOS Terminal) and passes through tmux without any passthrough config. For pixel-perfect previews, open the file on your laptop with a custom action.
+SpiceEdit uses native Kitty Graphics Protocol previews in Kitty, WezTerm, and Ghostty when it has a real terminal TTY with pixel cell dimensions. tmux, Zellij, SSH sessions, remote attachments, macOS Terminal, and unsupported terminals use the universal half-block preview; SpiceEdit does not attempt passthrough configuration.
+
+## Herdr image previews are disabled
+
+For a local Herdr pane, add the following to `~/.config/herdr/config.toml`:
+
+```toml
+[experimental]
+kitty_graphics = true
+```
+
+Then run `herdr server reload-config`. If SpiceEdit still reports that graphics are disabled, restart the Herdr server. SpiceEdit never edits this file or reloads or restarts Herdr for you.
+
+## Supported image formats and fallback
+
+SpiceEdit previews PNG and JPEG images and the first frame of a GIF. If graphics preparation or presentation fails, SpiceEdit automatically uses the half-block preview.
 
 ## I want to see what `Esc t` does
 
