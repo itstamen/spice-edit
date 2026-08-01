@@ -8,6 +8,7 @@
 package editor
 
 import (
+	"path/filepath"
 	"strings"
 
 	"github.com/alecthomas/chroma/v2"
@@ -106,6 +107,7 @@ func highlightSource(filename, src string, t theme.Theme) [][]tcell.Style {
 
 	iter, err := lexer.Tokenise(nil, src)
 	if err != nil {
+		applyMarkdownStructuralStyles(filename, lines, styles, t, base)
 		return styles
 	}
 
@@ -124,6 +126,7 @@ func highlightSource(filename, src string, t theme.Theme) [][]tcell.Style {
 			col++
 		}
 	}
+	applyMarkdownStructuralStyles(filename, lines, styles, t, base)
 	return styles
 }
 
@@ -182,4 +185,145 @@ func styleForToken(tt chroma.TokenType, t theme.Theme, base tcell.Style) tcell.S
 		return base
 	}
 	return base
+}
+
+// applyMarkdownStructuralStyles overlays lightweight Markdown document cues on
+// top of Chroma's token grid. It keeps raw Markdown text visible and editable;
+// only foreground emphasis changes for headings and fenced-code delimiters.
+func applyMarkdownStructuralStyles(filename string, lines []string, styles [][]tcell.Style, t theme.Theme, base tcell.Style) {
+	if !isMarkdownFilename(filename) {
+		return
+	}
+	inFence := false
+	fenceMarker := ""
+	for lineIdx, line := range lines {
+		if lineIdx >= len(styles) {
+			break
+		}
+		if level, ok := markdownHeadingLevel(line); ok {
+			styleRow(styles[lineIdx], base.Foreground(markdownHeadingColor(level, t)).Bold(true))
+			continue
+		}
+		if fence, marker, markerEnd, labelStart, labelEnd, ok := markdownFence(line); ok {
+			fenceStyle := base.Foreground(t.Muted)
+			labelStyle := base.Foreground(t.Accent).Bold(true)
+			styleRuneRange(styles[lineIdx], fence, markerEnd, fenceStyle)
+			if !inFence && labelStart < labelEnd {
+				styleRuneRange(styles[lineIdx], labelStart, labelEnd, labelStyle)
+			}
+			if inFence && marker == fenceMarker {
+				inFence = false
+				fenceMarker = ""
+			} else if !inFence {
+				inFence = true
+				fenceMarker = marker
+			}
+		}
+	}
+}
+
+// isMarkdownFilename reports whether filename should receive Markdown-specific
+// structural styling.
+func isMarkdownFilename(filename string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	if ext == ".md" || ext == ".markdown" {
+		return true
+	}
+	base := strings.ToLower(filepath.Base(filename))
+	return base == "readme.md" || base == "license.md"
+}
+
+// markdownHeadingLevel detects ATX headings from # through ######.
+func markdownHeadingLevel(line string) (int, bool) {
+	runes := []rune(line)
+	i := 0
+	for i < len(runes) && (runes[i] == ' ' || runes[i] == '\t') {
+		i++
+	}
+	level := 0
+	for i+level < len(runes) && runes[i+level] == '#' && level < 6 {
+		level++
+	}
+	if level == 0 {
+		return 0, false
+	}
+	next := i + level
+	if next < len(runes) && runes[next] == '#' {
+		return 0, false
+	}
+	if next < len(runes) && runes[next] != ' ' && runes[next] != '\t' {
+		return 0, false
+	}
+	return level, true
+}
+
+// markdownHeadingColor maps Markdown heading depth to theme colors.
+func markdownHeadingColor(level int, t theme.Theme) tcell.Color {
+	switch level {
+	case 1:
+		return t.Accent
+	case 2:
+		return t.AccentSoft
+	case 3:
+		return t.SynFunction
+	case 4:
+		return t.SynType
+	case 5:
+		return t.SynString
+	default:
+		return t.SynComment
+	}
+}
+
+// markdownFence detects a fenced-code delimiter and returns rune ranges for
+// the fence punctuation and optional language label.
+func markdownFence(line string) (fenceStart int, marker string, markerEnd, labelStart, labelEnd int, ok bool) {
+	runes := []rune(line)
+	i := 0
+	for i < len(runes) && i < 4 && runes[i] == ' ' {
+		i++
+	}
+	if i > 3 || i >= len(runes) {
+		return 0, "", 0, 0, 0, false
+	}
+	ch := runes[i]
+	if ch != '`' && ch != '~' {
+		return 0, "", 0, 0, 0, false
+	}
+	j := i
+	for j < len(runes) && runes[j] == ch {
+		j++
+	}
+	if j-i < 3 {
+		return 0, "", 0, 0, 0, false
+	}
+	k := j
+	for k < len(runes) && (runes[k] == ' ' || runes[k] == '\t') {
+		k++
+	}
+	labelEnd = k
+	for labelEnd < len(runes) && runes[labelEnd] != ' ' && runes[labelEnd] != '\t' {
+		labelEnd++
+	}
+	return i, string(ch), j, k, labelEnd, true
+}
+
+// styleRow applies st to every rune style in row.
+func styleRow(row []tcell.Style, st tcell.Style) {
+	for i := range row {
+		row[i] = st
+	}
+}
+
+// styleRuneRange applies st to the half-open rune range [start, end).
+func styleRuneRange(row []tcell.Style, start, end int, st tcell.Style) {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(row) {
+		end = len(row)
+	}
+	for i := start; i < end; i++ {
+		row[i] = st
+	}
 }

@@ -568,10 +568,16 @@ func (t *Tab) EnsureVisible(viewW, viewH int) {
 	}
 }
 
-// Render draws the editor's content (line numbers, code with syntax
-// highlighting, selection, cursor) into the rectangle (x, y, w, h).
-// Image tabs delegate to RenderImageFallback instead of drawing text.
+// Render draws the editor's content with soft wrap disabled. App calls
+// RenderSoftWrap when the session-level view toggle is enabled.
 func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
+	t.RenderSoftWrap(scr, th, x, y, w, h, false)
+}
+
+// RenderSoftWrap draws the editor's content (line numbers, code with syntax
+// highlighting, selection, cursor) into the rectangle (x, y, w, h). Image tabs
+// delegate to RenderImageFallback instead of drawing text.
+func (t *Tab) RenderSoftWrap(scr tcell.Screen, th theme.Theme, x, y, w, h int, softWrap bool) {
 	if t.IsImage() {
 		t.RenderImageFallback(scr, th, x, y, w, h)
 		return
@@ -579,8 +585,15 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	// Only re-center on the cursor if the cursor moved this tick. Doing it
 	// every render fights the user when they scroll with the wheel.
 	if t.cursorMoved {
-		t.EnsureVisible(w, h)
+		if softWrap {
+			t.EnsureVisibleSoftWrap(w, h)
+		} else {
+			t.EnsureVisible(w, h)
+		}
 		t.cursorMoved = false
+	}
+	if softWrap {
+		t.ScrollX = 0
 	}
 	t.clampScroll(h)
 	// Re-tokenise only when the content changed (StyleStale) or the viewport
@@ -616,87 +629,132 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		contentW = 1
 	}
 
-	for row := 0; row < h; row++ {
-		lineIdx := t.ScrollY + row
-		if lineIdx >= t.Buffer.LineCount() {
-			break
-		}
-		cy := y + row
-		isCursorLine := lineIdx == t.Cursor.Line
-
-		// Pick the row background — a hair lighter on the cursor's line so
-		// the eye can catch where the caret is from across the screen.
-		lineBg := bg
-		if isCursorLine {
-			lineBg = th.LineHL
-		}
-		lineBgStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Text)
-
-		// Re-paint this row with its (possibly highlighted) bg.
-		for cx := x; cx < x+w; cx++ {
-			scr.SetContent(cx, cy, ' ', nil, lineBgStyle)
-		}
-
-		// Gutter / line number, right-aligned with one trailing space.
-		numStr := fmt.Sprintf("%*d", gw-1, lineIdx+1)
-		gutterStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Muted)
-		if isCursorLine {
-			gutterStyle = gutterStyle.Foreground(th.AccentSoft)
-		}
-		if marker, ok := t.GitLines[lineIdx]; ok && marker != GitLineNone {
-			scr.SetContent(x, cy, gitLineMarkerRune(marker), nil, gutterStyle.Foreground(gitLineMarkerColor(th, marker)))
-		}
-		for i, r := range numStr {
-			if i == 0 && t.GitLines[lineIdx] != GitLineNone {
-				continue
-			}
-			scr.SetContent(x+i, cy, r, nil, gutterStyle)
-		}
-
-		// Line content, with syntax styles, selection bg, and line bg. We
-		// walk graphemes from the start of the line so tab stops anchor to
-		// column 0 and every wide glyph owns all of its terminal cells.
+	cursorVisible := false
+	cursorX, cursorY := 0, 0
+	row := 0
+	for lineIdx := t.ScrollY; lineIdx < t.Buffer.LineCount() && row < h; lineIdx++ {
 		runes := []rune(t.Buffer.Lines[lineIdx])
-		var styles []tcell.Style
-		if lineIdx < len(t.Styles) {
-			styles = t.Styles[lineIdx]
+		segments := []wrapSegment{{
+			startRune:   0,
+			endRune:     len(runes),
+			startVisual: 0,
+			width:       LineVisualCol(runes, len(runes)),
+		}}
+		if softWrap {
+			segments = wrapLine(runes, contentW)
 		}
-		lineScrollX := normalizedRuneCol(runes, t.ScrollX)
-		scrollVisual := LineVisualCol(runes, lineScrollX)
-		visualCol := 0 // visual cell offset from the start of the LINE
-		for _, cluster := range lineClusters(runes) {
-			width := clusterVisualWidth(cluster, visualCol)
-			screenCol := visualCol - scrollVisual
-			if cluster.EndRune > lineScrollX && screenCol >= 0 && screenCol+width <= contentW {
-				style := t.clusterStyle(lineIdx, cluster, styles, selStart, selEnd, hasSel, lineBg, th)
-				if cluster.Text == "\t" {
-					drawTabCells(scr, contentX+screenCol, cy, width, style)
-				} else {
-					termtext.DrawCluster(scr, contentX+screenCol, cy, contentW-screenCol, cluster, style)
+		for segIdx, segment := range segments {
+			if row >= h {
+				break
+			}
+			if lineIdx >= t.Buffer.LineCount() {
+				break
+			}
+			cy := y + row
+			isCursorLine := lineIdx == t.Cursor.Line
+
+			// Pick the row background — a hair lighter on the cursor's line so
+			// the eye can catch where the caret is from across the screen.
+			lineBg := bg
+			if isCursorLine {
+				lineBg = th.LineHL
+			}
+			lineBgStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Text)
+
+			// Re-paint this row with its (possibly highlighted) bg.
+			for cx := x; cx < x+w; cx++ {
+				scr.SetContent(cx, cy, ' ', nil, lineBgStyle)
+			}
+
+			// Gutter / line number, right-aligned with one trailing space.
+			// Wrapped continuation rows keep the gutter blank so the logical
+			// line number is not repeated as if it were a real buffer line.
+			numStr := fmt.Sprintf("%*d", gw-1, lineIdx+1)
+			gutterStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Muted)
+			if isCursorLine {
+				gutterStyle = gutterStyle.Foreground(th.AccentSoft)
+			}
+			if segIdx == 0 {
+				if marker, ok := t.GitLines[lineIdx]; ok && marker != GitLineNone {
+					scr.SetContent(x, cy, gitLineMarkerRune(marker), nil, gutterStyle.Foreground(gitLineMarkerColor(th, marker)))
+				}
+				for i, r := range numStr {
+					if i == 0 && t.GitLines[lineIdx] != GitLineNone {
+						continue
+					}
+					scr.SetContent(x+i, cy, r, nil, gutterStyle)
 				}
 			}
-			visualCol += width
-		}
 
-		// Overflow affordance: paint a muted '‹' / '›' over the leftmost /
-		// rightmost content cell when the line extends past the viewport
-		// in that direction. Without this hint a terminal user has no way
-		// to tell that more content exists off-screen — there's no
-		// scrollbar to clue them in. visualCol now equals the total
-		// visual width of the line; scrollVisual is the visual cell
-		// corresponding to ScrollX.
-		overflowStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Muted)
-		if lineScrollX > 0 {
-			scr.SetContent(contentX, cy, '‹', nil, overflowStyle)
-		}
-		if visualCol-scrollVisual > contentW {
-			scr.SetContent(contentX+contentW-1, cy, '›', nil, overflowStyle)
+			// Line content, with syntax styles, selection bg, and line bg. We
+			// walk graphemes from the start of the line so tab stops anchor to
+			// column 0 and every wide glyph owns all of its terminal cells.
+			var styles []tcell.Style
+			if lineIdx < len(t.Styles) {
+				styles = t.Styles[lineIdx]
+			}
+			lineScrollX := 0
+			if !softWrap {
+				lineScrollX = normalizedRuneCol(runes, t.ScrollX)
+			}
+			scrollVisual := LineVisualCol(runes, lineScrollX)
+			if softWrap {
+				scrollVisual = segment.startVisual
+			}
+			visualCol := 0 // visual cell offset from the start of the LINE
+			for _, cluster := range lineClusters(runes) {
+				width := clusterVisualWidth(cluster, visualCol)
+				screenCol := visualCol - scrollVisual
+				inSegment := cluster.EndRune > segment.startRune && cluster.StartRune < segment.endRune
+				if inSegment && cluster.EndRune > lineScrollX && screenCol >= 0 && screenCol+width <= contentW {
+					style := t.clusterStyle(lineIdx, cluster, styles, selStart, selEnd, hasSel, lineBg, th)
+					if cluster.Text == "\t" {
+						drawTabCells(scr, contentX+screenCol, cy, width, style)
+					} else {
+						termtext.DrawCluster(scr, contentX+screenCol, cy, contentW-screenCol, cluster, style)
+					}
+				}
+				visualCol += width
+			}
+
+			// Overflow affordance: paint a muted '‹' / '›' over the leftmost /
+			// rightmost content cell when the line extends past the viewport
+			// in that direction. Without this hint a terminal user has no way
+			// to tell that more content exists off-screen — there's no
+			// scrollbar to clue them in. visualCol now equals the total
+			// visual width of the line; scrollVisual is the visual cell
+			// corresponding to ScrollX.
+			overflowStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Muted)
+			if !softWrap && lineScrollX > 0 {
+				scr.SetContent(contentX, cy, '‹', nil, overflowStyle)
+			}
+			if !softWrap && visualCol-scrollVisual > contentW {
+				scr.SetContent(contentX+contentW-1, cy, '›', nil, overflowStyle)
+			}
+			if isCursorLine && cursorInSegment(t.Cursor.Col, segment, segIdx == len(segments)-1) {
+				cursorRunes := t.Buffer.LineRunes(t.Cursor.Line)
+				cursorVisual := LineVisualCol(cursorRunes, t.Cursor.Col)
+				cx := contentX + (cursorVisual - scrollVisual)
+				if cx >= contentX && cx < contentX+contentW {
+					cursorX, cursorY = cx, cy
+					cursorVisible = true
+				}
+			}
+			row++
 		}
 	}
 
 	// Position the hardware cursor at its visual column (so a cursor
 	// past a tab lands at the tab's *end* cell, not just rune-Col cells
 	// to the right of ScrollX).
+	if softWrap {
+		if cursorVisible {
+			scr.ShowCursor(cursorX, cursorY)
+		} else {
+			scr.HideCursor()
+		}
+		return
+	}
 	cy := y + (t.Cursor.Line - t.ScrollY)
 	cursorRunes := t.Buffer.LineRunes(t.Cursor.Line)
 	cursorVisual := LineVisualCol(cursorRunes, t.Cursor.Col)
@@ -707,6 +765,31 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	} else {
 		scr.HideCursor()
 	}
+}
+
+// EnsureVisibleSoftWrap keeps the logical cursor line inside the visible
+// viewport. V1 soft wrap deliberately keeps ScrollY logical-line based; precise
+// visual-row scrolling inside one long wrapped line is deferred.
+func (t *Tab) EnsureVisibleSoftWrap(viewW, viewH int) {
+	if t.Cursor.Line < t.ScrollY {
+		t.ScrollY = t.Cursor.Line
+	}
+	if t.Cursor.Line >= t.ScrollY+viewH {
+		t.ScrollY = t.Cursor.Line - viewH + 1
+	}
+	if t.ScrollY < 0 {
+		t.ScrollY = 0
+	}
+	t.ScrollX = 0
+}
+
+// cursorInSegment reports whether a logical cursor column belongs to a wrapped
+// segment. End-of-line belongs to the final segment.
+func cursorInSegment(col int, segment wrapSegment, last bool) bool {
+	if last {
+		return col >= segment.startRune && col <= segment.endRune
+	}
+	return col >= segment.startRune && col < segment.endRune
 }
 
 // clusterStyle resolves syntax, selection, and find styles for an entire

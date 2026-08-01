@@ -227,3 +227,45 @@ func TestHighlightVisible_LeadRecoversCommentState(t *testing.T) {
 		}
 	}
 }
+
+// TestHighlight_MarkdownStructuralStyles overlays Glow-inspired document cues
+// without changing the shape of the style grid.
+func TestHighlight_MarkdownStructuralStyles(t *testing.T) {
+	th := theme.Default()
+	src := "# Title\n## Section\n```go\nfmt.Println(1)\n```\nplain\n"
+	got := Highlight("README.md", src, th)
+
+	fgAt := func(line, col int) tcell.Color {
+		fg, _, _ := got[line][col].Decompose()
+		return fg
+	}
+	if fgAt(0, 0) != th.Accent {
+		t.Fatalf("h1 fg = %v, want Accent", fgAt(0, 0))
+	}
+	if fgAt(1, 0) != th.AccentSoft {
+		t.Fatalf("h2 fg = %v, want AccentSoft", fgAt(1, 0))
+	}
+	if fgAt(2, 0) != th.Muted {
+		t.Fatalf("fence fg = %v, want Muted", fgAt(2, 0))
+	}
+	if fgAt(2, 3) != th.Accent {
+		t.Fatalf("fence language fg = %v, want Accent", fgAt(2, 3))
+	}
+	if fgAt(4, 0) != th.Muted {
+		t.Fatalf("closing fence fg = %v, want Muted", fgAt(4, 0))
+	}
+	if len(got[0]) != len([]rune("# Title")) {
+		t.Fatalf("heading row length changed: %d", len(got[0]))
+	}
+}
+
+// TestHighlight_MarkdownStructuralStylesDoNotApplyToTextFiles keeps Markdown
+// punctuation from being recolored in unrelated file types.
+func TestHighlight_MarkdownStructuralStylesDoNotApplyToTextFiles(t *testing.T) {
+	th := theme.Default()
+	got := Highlight("notes.txt", "# Title\n```go\n", th)
+	base := tcell.StyleDefault.Background(th.BG).Foreground(th.Text)
+	if got[0][0] != base {
+		t.Fatalf("text file heading-like line was styled: %v", got[0][0])
+	}
+}

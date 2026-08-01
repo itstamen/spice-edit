@@ -10,6 +10,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,8 +32,8 @@ func TestLeaderActionFor_AllBindingsResolve(t *testing.T) {
 // leaderActionFor reports a miss with nil so handleKey can distinguish
 // "leader fired" from "key was unbound — fall through".
 func TestLeaderActionFor_UnboundReturnsNil(t *testing.T) {
-	if leaderActionFor('z') != nil {
-		t.Fatal("'z' should not be a leader binding (no editor action mapped)")
+	if leaderActionFor('y') != nil {
+		t.Fatal("'y' should not be a leader binding (no editor action mapped)")
 	}
 }
 
@@ -99,6 +100,39 @@ func TestHandleKey_LeaderToggleSidebar(t *testing.T) {
 	}
 }
 
+// TestHandleKey_LeaderToggleSoftWrap flips softWrap via Esc-z and clears
+// horizontal scroll on open text tabs.
+func TestHandleKey_LeaderToggleSoftWrap(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "long.txt")
+	if err := os.WriteFile(target, []byte(strings.Repeat("x", 100)), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	tab := a.activeTabPtr()
+	tab.ScrollX = 20
+
+	a.handleKey(keyEv(tcell.KeyEsc, 0))
+	a.handleKey(keyEv(tcell.KeyRune, 'z'))
+
+	if !a.softWrap {
+		t.Fatal("Esc-z should enable soft wrap")
+	}
+	if tab.ScrollX != 0 {
+		t.Fatalf("Esc-z should clear ScrollX, got %d", tab.ScrollX)
+	}
+	if a.statusMsg != "Soft wrap enabled" {
+		t.Fatalf("status = %q, want enabled message", a.statusMsg)
+	}
+
+	a.handleKey(keyEv(tcell.KeyEsc, 0))
+	a.handleKey(keyEv(tcell.KeyRune, 'z'))
+	if a.softWrap {
+		t.Fatal("second Esc-z should disable soft wrap")
+	}
+}
+
 // TestHandleKey_LeaderToggleLineComment binds Esc-/ to the same action menu
 // path, giving keyboard users a fast toggle without adding Ctrl shortcuts.
 func TestHandleKey_LeaderToggleLineComment(t *testing.T) {
@@ -145,9 +179,9 @@ func TestHandleKey_LeaderUnboundFallsThrough(t *testing.T) {
 	a.openFile(target)
 
 	a.handleKey(keyEv(tcell.KeyEsc, 0))
-	a.handleKey(keyEv(tcell.KeyRune, 'z'))
+	a.handleKey(keyEv(tcell.KeyRune, 'y'))
 
-	if got := a.activeTabPtr().Buffer.Lines[0]; got != "z" {
+	if got := a.activeTabPtr().Buffer.Lines[0]; got != "y" {
 		t.Fatalf("unbound key after Esc should reach the editor, got %q", got)
 	}
 }

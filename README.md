@@ -191,6 +191,7 @@ within half a second tap one of the letters below.
 | `Esc q`     | Quit                 |
 | `Esc n`     | New file             |
 | `Esc t`     | Toggle sidebar       |
+| `Esc z`     | Toggle soft wrap     |
 | `Esc /`     | Toggle line comment  |
 | `Esc f`     | Find in file         |
 | `Esc p`     | Find file in project |

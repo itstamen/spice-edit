@@ -1125,6 +1125,95 @@ func TestTab_Render_NoOverflowIndicator_WhenLineFits(t *testing.T) {
 	}
 }
 
+// TestTab_RenderSoftWrap_WrapsLongLine renders a single logical line across
+// multiple visual rows without inserting newlines into the buffer.
+func TestTab_RenderSoftWrap_WrapsLongLine(t *testing.T) {
+	scr := newSimScreen(t, 20, 5)
+	defer scr.Fini()
+
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("abcdefghijklmnop")
+	tab.Cursor = Position{Line: 0, Col: 0}
+	tab.Anchor = tab.Cursor
+
+	tab.RenderSoftWrap(scr, theme.Default(), 0, 0, 20, 5, true)
+	scr.Show()
+
+	if got := tab.Buffer.String(); got != "abcdefghijklmnop" {
+		t.Fatalf("buffer changed after render: %q", got)
+	}
+	row0 := screenRowRunes(scr, 0)
+	row1 := screenRowRunes(scr, 1)
+	if !strings.Contains(row0, "abcdefghijklm") {
+		t.Fatalf("row0 = %q, want first wrapped segment", row0)
+	}
+	if !strings.Contains(row1, "nop") {
+		t.Fatalf("row1 = %q, want second wrapped segment", row1)
+	}
+	if strings.Contains(row0, "›") || strings.Contains(row1, "›") {
+		t.Fatalf("soft wrap should not show horizontal overflow markers: %q / %q", row0, row1)
+	}
+}
+
+// TestTab_RenderSoftWrap_CJKBoundaryDoesNotSplit checks wrap boundaries at the
+// cell level so a wide glyph never gets sliced across visual rows.
+func TestTab_RenderSoftWrap_CJKBoundaryDoesNotSplit(t *testing.T) {
+	scr := newSimScreen(t, 10, 4) // content width = 3 cells.
+	defer scr.Fini()
+
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("中a文")
+	tab.RenderSoftWrap(scr, theme.Default(), 0, 0, 10, 4, true)
+
+	contentX := defaultGutterWidth + 1
+	text, _, width := scr.Get(contentX, 0)
+	if text != "中" || width != 2 {
+		t.Fatalf("row0 first cell = (%q, %d), want (中, 2)", text, width)
+	}
+	text, _, width = scr.Get(contentX+2, 0)
+	if text != "a" || width != 1 {
+		t.Fatalf("row0 third cell = (%q, %d), want (a, 1)", text, width)
+	}
+	text, _, width = scr.Get(contentX, 1)
+	if text != "文" || width != 2 {
+		t.Fatalf("row1 first cell = (%q, %d), want (文, 2)", text, width)
+	}
+}
+
+// TestTab_RenderSoftWrap_IgnoresScrollX ensures wrapped rendering starts from
+// the left edge even if the previous no-wrap view had horizontal scroll.
+func TestTab_RenderSoftWrap_IgnoresScrollX(t *testing.T) {
+	scr := newSimScreen(t, 20, 5)
+	defer scr.Fini()
+
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("abcdef")
+	tab.ScrollX = 4
+	tab.RenderSoftWrap(scr, theme.Default(), 0, 0, 20, 5, true)
+	scr.Show()
+	if tab.ScrollX != 0 {
+		t.Fatalf("soft wrap render should clear ScrollX, got %d", tab.ScrollX)
+	}
+	if row := screenRowRunes(scr, 0); !strings.Contains(row, "abcdef") {
+		t.Fatalf("row = %q, want unscrolled content", row)
+	}
+}
+
+// screenRowRunes returns one row from a SimulationScreen as runes.
+func screenRowRunes(scr tcell.SimulationScreen, y int) string {
+	cells, w, _ := scr.GetContents()
+	rs := make([]rune, w)
+	for x := 0; x < w; x++ {
+		c := cells[y*w+x]
+		if len(c.Runes) == 0 {
+			rs[x] = ' '
+			continue
+		}
+		rs[x] = c.Runes[0]
+	}
+	return string(rs)
+}
+
 // TestGutterWidthFor pins the dynamic gutter width: files up to 9999 lines
 // keep the default six-cell gutter, and each extra digit grows it by one so
 // the git change-bar always has a blank leading cell to sit in.

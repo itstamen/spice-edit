@@ -234,6 +234,7 @@ func builtinMenuGroups() [][]menuItemDef {
 		},
 		// View toggle
 		{
+			{shortcut: "Esc z", action: (*App).menuToggleSoftWrap, enabled: alwaysTrue, labelFor: (*App).softWrapToggleLabel},
 			{shortcut: "Esc t", action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel, visible: (*App).hasTree},
 		},
 		// Quit
@@ -372,6 +373,10 @@ type App struct {
 	// sidebarShown controls whether the file explorer panel is visible.
 	// When false the editor and tab bar fill the whole window.
 	sidebarShown bool
+
+	// softWrap controls whether text tabs wrap long logical lines to the editor
+	// width. It is a session-level view preference, deliberately not persisted.
+	softWrap bool
 
 	// sidebarWidth is the live width of the file-explorer block (file tree
 	// + 1-cell splitter on its right edge), in screen cells. The user can
@@ -1619,6 +1624,9 @@ func (a *App) scrollAtH(x, y, delta int) {
 	}
 	if y > 0 && y < a.height-1 {
 		if t := a.activeTabPtr(); t != nil {
+			if a.softWrap && !t.IsImage() {
+				return
+			}
 			t.ScrollH(delta)
 		}
 	}
@@ -2504,6 +2512,32 @@ func (a *App) menuToggleSidebar() {
 	a.sidebarShown = !a.sidebarShown
 }
 
+// menuToggleSoftWrap flips the session-level text wrapping preference. When
+// enabled, horizontal scroll is reset because wrapped text and horizontal
+// offset are mutually exclusive views of the same long logical lines.
+func (a *App) menuToggleSoftWrap() {
+	a.closeMenu()
+	a.softWrap = !a.softWrap
+	if a.softWrap {
+		for _, tab := range a.tabs {
+			if tab != nil && !tab.IsImage() {
+				tab.ScrollX = 0
+			}
+		}
+		a.flash("Soft wrap enabled")
+		return
+	}
+	a.flash("Soft wrap disabled")
+}
+
+// softWrapToggleLabel returns the dynamic label for the soft-wrap menu row.
+func (a *App) softWrapToggleLabel() string {
+	if a.softWrap {
+		return "Disable soft wrap"
+	}
+	return "Enable soft wrap"
+}
+
 // sidebarToggleLabel returns the label the toggle row should display given
 // the current sidebar state. Drawn dynamically by drawMenu.
 func (a *App) sidebarToggleLabel() string {
@@ -2585,7 +2619,7 @@ func (a *App) draw() {
 				tab.Render(a.screen, a.theme, ex, ey, ew, eh)
 			}
 		} else {
-			tab.Render(a.screen, a.theme, ex, ey, ew, eh)
+			tab.RenderSoftWrap(a.screen, a.theme, ex, ey, ew, eh, a.softWrap)
 		}
 	} else {
 		a.drawEmptyEditor()

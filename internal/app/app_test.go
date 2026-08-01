@@ -1433,6 +1433,60 @@ func TestHandleMouse_ShiftWheelScrollsHorizontally(t *testing.T) {
 	}
 }
 
+// TestHandleMouse_SoftWrapIgnoresHorizontalWheel keeps wrapped text from
+// retaining a contradictory horizontal scroll offset.
+func TestHandleMouse_SoftWrapIgnoresHorizontalWheel(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "long.txt")
+	if err := os.WriteFile(target, []byte(strings.Repeat("x", 200)+"\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	a.softWrap = true
+	tab := a.activeTabPtr()
+	editorX := a.sidebarW() + 10
+
+	a.handleMouse(tcell.NewEventMouse(editorX, 5, tcell.WheelRight, tcell.ModNone))
+	if tab.ScrollX != 0 {
+		t.Fatalf("WheelRight with soft wrap should not move ScrollX, got %d", tab.ScrollX)
+	}
+	a.handleMouse(tcell.NewEventMouse(editorX, 5, tcell.WheelDown, tcell.ModShift))
+	if tab.ScrollX != 0 {
+		t.Fatalf("Shift+WheelDown with soft wrap should not move ScrollX, got %d", tab.ScrollX)
+	}
+}
+
+// TestDraw_UsesSoftWrapForTextTabs catches the app/editor integration point:
+// toggling softWrap must affect the actual draw path, not only the menu state.
+func TestDraw_UsesSoftWrapForTextTabs(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "long.txt")
+	if err := os.WriteFile(target, []byte("abcdefghijklmnop"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.width = 60
+	a.height = 24
+	a.screen.(tcell.SimulationScreen).SetSize(a.width, a.height)
+	a.sidebarShown = true
+	a.sidebarWidth = 40
+	a.openFile(target)
+	a.softWrap = true
+
+	a.draw()
+	a.screen.Show()
+
+	row0 := screenLine(a.screen.(tcell.SimulationScreen), 1) // editor body starts below the tab bar.
+	row1 := screenLine(a.screen.(tcell.SimulationScreen), 2)
+	if !strings.Contains(row0, "abcdefghijklm") {
+		t.Fatalf("row0 = %q, want first wrapped segment", row0)
+	}
+	if !strings.Contains(row1, "nop") {
+		t.Fatalf("row1 = %q, want second wrapped segment", row1)
+	}
+}
+
 // TestHandleMouse_ShiftStickyForWheel covers the Zellij quirk where
 // Shift arrives in a ButtonNone+Shift event right before an unmodified
 // WheelDown. We feed that exact sequence and confirm the wheel event is
@@ -1664,13 +1718,13 @@ func TestMenuLayout_NoCustomActions(t *testing.T) {
 	a.customActions = nil
 	items, dividers, h := a.menuLayout()
 
-	if h != 31 {
-		t.Errorf("modalHeight = %d, want 31", h)
+	if h != 32 {
+		t.Errorf("modalHeight = %d, want 32", h)
 	}
-	if got := len(items); got != 21 {
-		t.Errorf("item count = %d, want 21 built-ins", got)
+	if got := len(items); got != 22 {
+		t.Errorf("item count = %d, want 22 built-ins", got)
 	}
-	wantDiv := []int{2, 6, 10, 13, 21, 26, 28}
+	wantDiv := []int{2, 6, 10, 13, 21, 26, 29}
 	if len(dividers) != len(wantDiv) {
 		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
 	}
@@ -1725,6 +1779,7 @@ func TestMenuLayout_Shortcuts(t *testing.T) {
 		"Cut selection":        "",
 		"Paste":                "",
 		"Toggle line comment":  "Esc /",
+		"Enable soft wrap":     "Esc z",
 		"Hide file explorer":   "Esc t",
 		"Quit editor":          "Esc q",
 	}
@@ -1744,6 +1799,24 @@ func TestMenuLayout_Shortcuts(t *testing.T) {
 		} else if got != shortcut {
 			t.Errorf("%s shortcut = %q, want %q", label, got, shortcut)
 		}
+	}
+}
+
+// TestMenuLayout_SoftWrapDynamicLabel verifies the view-toggle row reflects
+// the current session setting and advertises the Esc-z shortcut.
+func TestMenuLayout_SoftWrapDynamicLabel(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	item := menuItemByLabel(t, a, "Enable soft wrap")
+	if item.shortcut != "Esc z" {
+		t.Fatalf("shortcut = %q, want Esc z", item.shortcut)
+	}
+	item.action(a)
+	if !a.softWrap {
+		t.Fatal("menu action should enable soft wrap")
+	}
+	item = menuItemByLabel(t, a, "Disable soft wrap")
+	if item.shortcut != "Esc z" {
+		t.Fatalf("shortcut = %q, want Esc z", item.shortcut)
 	}
 }
 
@@ -1796,7 +1869,11 @@ func menuItemByLabel(t *testing.T, a *App, label string) menuItemDef {
 	t.Helper()
 	items, _, _ := a.menuLayout()
 	for _, item := range items {
-		if item.label == label {
+		itemLabel := item.label
+		if item.labelFor != nil {
+			itemLabel = item.labelFor(a)
+		}
+		if itemLabel == label {
 			return item
 		}
 	}
@@ -1831,8 +1908,8 @@ func TestMenuLayout_WithCustomActions(t *testing.T) {
 	}
 	items, _, h := a.menuLayout()
 
-	if h != 34 { // 31 + 2 items + 1 divider
-		t.Errorf("modalHeight = %d, want 34", h)
+	if h != 35 { // 32 + 2 items + 1 divider
+		t.Errorf("modalHeight = %d, want 35", h)
 	}
 	// Custom actions should be the second-to-last and third-to-last
 	// rows, with Quit as the final row.
