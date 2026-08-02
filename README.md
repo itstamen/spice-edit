@@ -191,6 +191,7 @@ within half a second tap one of the letters below.
 | `Esc q`     | Quit                 |
 | `Esc n`     | New file             |
 | `Esc o`     | Open with default app |
+| `Esc e`     | Show in file manager |
 | `Esc t`     | Toggle sidebar       |
 | `Esc z`     | Toggle soft wrap     |
 | `Esc /`     | Toggle line comment  |
@@ -208,16 +209,20 @@ the hotkeys are just a faster path for the actions you reach for most.
 
 SpiceEdit edits UTF-8 text files and previews PNG, JPEG, and the first
 frame of GIF images inside the terminal. Clicking a PDF, office document,
-archive, database, media file, executable, or other unsupported file opens
-it with the default application on the machine running SpiceEdit. The tab
-stays open as a read-only placeholder so the file remains visible in project
-context, and the editor pane displays
+archive, database, media file, executable, or other unsupported file opens a
+read-only placeholder and asks before launching the default application on
+the machine running SpiceEdit. Choosing No keeps the placeholder active
+without launching another application. The editor pane displays
 `编辑器只支持文本及图片文件在线编辑.`
 
 Press `Esc o` or choose **Open with default app** from the `≡` menu to hand
 any file-backed text, image, or placeholder tab to the host operating system.
 Dirty text buffers are not saved first; the external application receives the
 current on-disk file.
+
+Press `Esc e` or choose **Show in file manager** to locate the active file in
+macOS Finder or Windows Explorer. If the active tab has no path, SpiceEdit
+opens the project root instead. This action is not supported on Linux.
 
 The handoff uses the native default-application mechanism on macOS and Windows.
 On Linux it requires `xdg-open` or `gio`. In an SSH session, the command runs

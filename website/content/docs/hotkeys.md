@@ -22,6 +22,7 @@ So `Esc` is the leader. Tap `Esc`, then within half a second tap a bound letter.
 | `Esc q`     | Quit                  |
 | `Esc n`     | New file              |
 | `Esc o`     | Open with default app |
+| `Esc e`     | Show in file manager  |
 | `Esc t`     | Toggle sidebar        |
 | `Esc z`     | Toggle soft wrap      |
 | `Esc /`     | Toggle line comment   |
@@ -31,6 +32,10 @@ So `Esc` is the leader. Tap `Esc`, then within half a second tap a bound letter.
 `Esc o` opens the active tab's on-disk path with the default application on
 the machine running SpiceEdit. It works for text, image, and unsupported-file
 placeholder tabs and never saves a dirty text buffer first.
+
+`Esc e` selects the active file in macOS Finder or Windows Explorer. With no
+file-backed active tab, it opens the project root. Linux does not support this
+action.
 
 ## Editor keys (no Esc needed)
 

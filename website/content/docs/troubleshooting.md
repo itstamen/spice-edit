@@ -85,12 +85,21 @@ SpiceEdit previews PNG and JPEG images and the first frame of a GIF. If graphics
 
 SpiceEdit keeps PDFs, office documents, archives, databases, media files,
 executables, and other non-text formats out of the editable buffer. It shows a
-read-only placeholder and asks the host operating system to open the file.
+read-only placeholder and asks for confirmation before opening the file with
+the host operating system.
 
 On Linux, make sure `xdg-open` or `gio` is installed and that the session has
 access to a desktop. Over SSH, the opener runs on the remote host. Press
 `Esc o` to retry the active file; use a custom action if the file must be
 copied to and opened on your laptop instead.
+
+## `Esc e` did not show the file in a file manager
+
+`Esc e` selects the active file in macOS Finder or Windows Explorer. If the
+active tab has no path, it opens the project root. Linux and other operating
+systems do not support this action. Over SSH, Finder or Explorer must exist on
+the remote SpiceEdit host; the shortcut cannot open a file manager on your
+local laptop.
 
 ## I want to see what `Esc t` does
 

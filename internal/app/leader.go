@@ -44,6 +44,7 @@ func leaderBindings() []leaderBinding {
 		{'q', (*App).menuQuit},
 		{'n', (*App).menuNewFile},
 		{'o', (*App).menuOpenWithDefaultApp},
+		{'e', (*App).menuShowInFileManager},
 		{'t', (*App).menuToggleSidebar},
 		{'z', (*App).menuToggleSoftWrap},
 		{'/', (*App).menuToggleLineComment},

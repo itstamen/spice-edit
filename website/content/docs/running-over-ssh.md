@@ -22,11 +22,12 @@ That's it. SpiceEdit is now running on the remote box, sharing the SSH channel w
 
 ## Default applications run on the remote host
 
-When SpiceEdit opens an unsupported file automatically, or when you press
-`Esc o`, it asks the operating system running SpiceEdit to open that path. In
-an SSH session that is the remote box, not your laptop. A headless server may
-have no desktop opener, in which case the status bar reports the failure and
-the read-only placeholder tab remains open.
+When you confirm an unsupported-file tree click, or when you press `Esc o`,
+SpiceEdit asks its host operating system to open that path. In an SSH session
+that is the remote box, not your laptop. A headless server may have no desktop
+opener, in which case the status bar reports the failure and the read-only
+placeholder tab remains open. `Esc e` also operates on the SpiceEdit host and
+is available only when that host is macOS or Windows.
 
 To open the file on your laptop, use a [custom action](/docs/custom-actions/)
 that copies the file back over SSH and then launches it on the client machine.

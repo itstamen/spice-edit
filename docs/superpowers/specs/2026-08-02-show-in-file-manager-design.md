@@ -3,7 +3,7 @@
 ## Document information
 
 - **Date:** 2026-08-02
-- **Status:** Proposed
+- **Status:** Approved
 - **Related design:** `docs/superpowers/specs/2026-08-02-default-application-open-design.md`
 - **Selected approach:** Use native macOS and Windows file-manager reveal mechanisms behind an asynchronous app adapter.
 

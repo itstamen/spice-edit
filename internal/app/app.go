@@ -219,6 +219,7 @@ func builtinMenuGroups() [][]menuItemDef {
 		{
 			{shortcut: "Esc n", action: (*App).menuNewFile, enabled: alwaysTrue, labelFor: (*App).newFileLabel},
 			{label: "Open with default app", shortcut: "Esc o", action: (*App).menuOpenWithDefaultApp, enabled: (*App).hasFileTab},
+			{label: "Show in file manager", shortcut: "Esc e", action: (*App).menuShowInFileManager, enabled: alwaysTrue},
 			{label: "Rename file", action: (*App).menuRename, enabled: (*App).hasFileTab},
 			{label: "Delete file", action: (*App).menuDelete, enabled: (*App).hasFileTab},
 			{action: (*App).menuRenameFolder, enabled: (*App).hasActiveSubfolder, labelFor: (*App).renameFolderLabel},
@@ -388,6 +389,7 @@ type App struct {
 	statusMsg    string
 	statusUntil  time.Time
 	openPath     pathOpener
+	revealPath   pathRevealer
 	dragMode     string // "editor" while a drag-select is active.
 	lastClick    clickRecord
 	lastTabRects []tabRect
@@ -1051,6 +1053,8 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.handleCustomActionDone(e)
 	case *defaultOpenDoneEvent:
 		a.handleDefaultOpenDone(e)
+	case *revealDoneEvent:
+		a.handleRevealDone(e)
 	case *formatDoneEvent:
 		a.handleFormatDone(e)
 	case *finderRebuiltEvent:
@@ -1718,7 +1722,7 @@ func (a *App) sidebarClick(x, y int) {
 		return
 	}
 	a.setActiveFolder(filepath.Dir(n.Path))
-	a.openFile(n.Path)
+	a.openFileWithExternalPolicy(n.Path, externalOpenConfirm)
 }
 
 // setActiveFolder records path as the editor's current working folder and
@@ -2011,6 +2015,15 @@ func (a *App) flash(msg string) {
 	a.statusUntil = time.Now().Add(statusFlashFor)
 }
 
+// externalOpenPolicy controls whether selecting an external tab launches the
+// host application immediately or first asks the user for confirmation.
+type externalOpenPolicy uint8
+
+const (
+	externalOpenImmediate externalOpenPolicy = iota
+	externalOpenConfirm
+)
+
 // OpenFile opens the file at path in a new tab — or switches to it if
 // it is already open. Exported so main.go can seed the editor with the
 // file the user named on the command line ("spiceedit foo.go"). Thin
@@ -2023,6 +2036,12 @@ func (a *App) OpenFile(path string) { a.openFile(path) }
 // Whatever the path resolves to, its parent becomes the active folder so
 // the next New File from the main menu lands next to it.
 func (a *App) openFile(path string) {
+	a.openFileWithExternalPolicy(path, externalOpenImmediate)
+}
+
+// openFileWithExternalPolicy shares tab creation and activation while letting
+// callers choose how an external file is handed to the host application.
+func (a *App) openFileWithExternalPolicy(path string, policy externalOpenPolicy) {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
 	}
@@ -2050,7 +2069,7 @@ func (a *App) openFile(path string) {
 				t.GitLines = loadGitLineChanges(a.rootDir, t.Path)
 			}
 			if t.IsExternal() {
-				a.openPathWithDefaultApp(t.Path)
+				a.handleExternalFileOpen(t.Path, policy)
 			}
 			return
 		}
@@ -2066,10 +2085,25 @@ func (a *App) openFile(path string) {
 		t.GitLines = loadGitLineChanges(a.rootDir, t.Path)
 	}
 	if t.IsExternal() {
-		a.openPathWithDefaultApp(t.Path)
+		a.handleExternalFileOpen(t.Path, policy)
 		return
 	}
 	a.flash(fmt.Sprintf("Opened %s", filepath.Base(path)))
+}
+
+// handleExternalFileOpen applies the caller's launch policy after the
+// external placeholder tab has been created or activated.
+func (a *App) handleExternalFileOpen(path string, policy externalOpenPolicy) {
+	if policy == externalOpenConfirm {
+		name := filepath.Base(path)
+		a.openConfirm(
+			"Open with default app?",
+			fmt.Sprintf("Open %s with the system default application?", name),
+			func(app *App) { app.openPathWithDefaultApp(path) },
+		)
+		return
+	}
+	a.openPathWithDefaultApp(path)
 }
 
 // saveActiveTab writes the active tab's buffer to disk.
@@ -2560,6 +2594,13 @@ func (a *App) menuOpenWithDefaultApp() {
 		return
 	}
 	a.openPathWithDefaultApp(tab.Path)
+}
+
+// menuShowInFileManager selects the active file in the host file manager or
+// opens the project root when no file-backed tab is active.
+func (a *App) menuShowInFileManager() {
+	a.closeMenu()
+	a.showInFileManager()
 }
 
 // menuRefreshTree forces an immediate sidebar reload. Currently unwired

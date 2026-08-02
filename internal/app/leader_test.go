@@ -163,6 +163,36 @@ func TestHandleKey_LeaderOpenWithDefaultApp(t *testing.T) {
 	a.handleEvent(waitForDefaultOpenDone(t, a))
 }
 
+// TestHandleKey_LeaderShowInFileManager verifies Esc-e reaches the shared
+// reveal action and selects the active file.
+func TestHandleKey_LeaderShowInFileManager(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(target, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	calls := make(chan revealCall, 1)
+	a.revealPath = func(path string, selectFile bool) error {
+		calls <- revealCall{path: path, selectFile: selectFile}
+		return nil
+	}
+
+	a.handleKey(keyEv(tcell.KeyEsc, 0))
+	a.handleKey(keyEv(tcell.KeyRune, 'e'))
+
+	select {
+	case got := <-calls:
+		if got.path != target || !got.selectFile {
+			t.Fatalf("reveal call = %#v, want path=%q select=true", got, target)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Esc-e did not invoke file manager reveal")
+	}
+	a.handleEvent(waitForRevealDone(t, a))
+}
+
 // TestHandleKey_LeaderToggleLineComment binds Esc-/ to the same action menu
 // path, giving keyboard users a fast toggle without adding Ctrl shortcuts.
 func TestHandleKey_LeaderToggleLineComment(t *testing.T) {

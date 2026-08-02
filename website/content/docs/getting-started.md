@@ -36,11 +36,12 @@ The layout is what you'd expect: a file tree on the left, a tab bar across the t
 
 Single-click any file in the tree to open it. UTF-8 text opens in the editor;
 PNG, JPEG, and GIF images open in the inline preview. PDFs, office documents,
-archives, media, executables, and other unsupported files open with the host
-operating system's default application while SpiceEdit shows a read-only
-placeholder tab. Single-click a folder to expand it. The active folder — the
-one New File and Rename Folder will target — bolds in the sidebar so you always
-know where the next file lands.
+archives, media, executables, and other unsupported files open a read-only
+placeholder tab and a confirmation dialog. Choose Yes to use the host operating
+system's default application, or No to keep the placeholder without launching
+another application. Single-click a folder to expand it. The active folder —
+the one New File and Rename Folder will target — bolds in the sidebar so you
+always know where the next file lands.
 
 <figure class="screenshot-figure">
   <img

@@ -3,7 +3,7 @@
 ## Document information
 
 - **Date:** 2026-08-02
-- **Status:** Proposed
+- **Status:** Approved
 - **Related design:** `docs/superpowers/specs/2026-08-02-default-application-open-design.md`
 - **Selected approach:** Add a source-aware external-open policy and reuse the existing Yes/No confirmation modal.
 

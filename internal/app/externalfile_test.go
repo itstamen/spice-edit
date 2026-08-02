@@ -17,6 +17,141 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
+// clickTreePath renders the file tree, locates path in its hit-test rows, and
+// dispatches the same sidebar click used by the production mouse handler.
+func clickTreePath(t *testing.T, a *App, path string) {
+	t.Helper()
+	a.draw()
+	sx, sy, _, sh := a.sidebarRect()
+	for y := sy; y < sy+sh; y++ {
+		node, ok := a.tree.HitTest(1, y-sy)
+		if ok && node.Path == path {
+			a.sidebarClick(sx+1, y)
+			return
+		}
+	}
+	t.Fatalf("tree path %q was not visible", path)
+}
+
+// assertDefaultAppNotOpened gives the asynchronous opener enough time to run
+// and fails when a confirmation or inline-open path launches it unexpectedly.
+func assertDefaultAppNotOpened(t *testing.T, opened <-chan string) {
+	t.Helper()
+	select {
+	case got := <-opened:
+		t.Fatalf("default application opened unexpectedly: %s", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// TestSidebarClick_ExternalRequiresConfirmation verifies that a tree click
+// activates the placeholder first and only launches after an explicit Yes.
+func TestSidebarClick_ExternalRequiresConfirmation(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "manual.pdf")
+	if err := os.WriteFile(target, []byte("%PDF-1.7"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	opened := make(chan string, 1)
+	a.openPath = func(path string) error {
+		opened <- path
+		return nil
+	}
+
+	clickTreePath(t, a, target)
+
+	if !a.confirmOpen || a.confirmHover != 0 {
+		t.Fatalf("confirm open=%v hover=%d, want open with No selected", a.confirmOpen, a.confirmHover)
+	}
+	if a.confirmTitle != "Open with default app?" {
+		t.Fatalf("confirm title = %q", a.confirmTitle)
+	}
+	if !strings.Contains(a.confirmMessage, "manual.pdf") {
+		t.Fatalf("confirm message = %q", a.confirmMessage)
+	}
+	if tab := a.activeTabPtr(); tab == nil || !tab.IsExternal() || tab.Path != target {
+		t.Fatalf("active tab = %#v", tab)
+	}
+	assertDefaultAppNotOpened(t, opened)
+
+	a.confirmHover = 1
+	a.confirmYes()
+	select {
+	case got := <-opened:
+		if got != target {
+			t.Fatalf("opened path = %q, want %q", got, target)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("opener did not run after confirmation")
+	}
+	a.handleEvent(waitForDefaultOpenDone(t, a))
+}
+
+// TestSidebarClick_ExternalCancelAndRepeat keeps the placeholder active after
+// No and requires a fresh confirmation on every later tree click.
+func TestSidebarClick_ExternalCancelAndRepeat(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "manual.pdf")
+	if err := os.WriteFile(target, []byte("%PDF-1.7"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	opened := make(chan string, 1)
+	a.openPath = func(path string) error {
+		opened <- path
+		return nil
+	}
+
+	clickTreePath(t, a, target)
+	a.confirmCancel()
+	if a.confirmOpen {
+		t.Fatal("confirmation remained open after cancel")
+	}
+	if len(a.tabs) != 1 || a.activeTabPtr().Path != target || !a.activeTabPtr().IsExternal() {
+		t.Fatalf("cancel changed external tab state: tabs=%d active=%#v", len(a.tabs), a.activeTabPtr())
+	}
+	assertDefaultAppNotOpened(t, opened)
+
+	clickTreePath(t, a, target)
+	if !a.confirmOpen {
+		t.Fatal("repeated tree click did not reopen confirmation")
+	}
+	if len(a.tabs) != 1 {
+		t.Fatalf("repeated tree click created %d tabs", len(a.tabs))
+	}
+	a.confirmCancel()
+	assertDefaultAppNotOpened(t, opened)
+}
+
+// TestSidebarClick_TextAndImageStayInline ensures the tree confirmation is
+// limited to files classified as external.
+func TestSidebarClick_TextAndImageStayInline(t *testing.T) {
+	dir := t.TempDir()
+	textPath := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(textPath, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	imagePath := writeImageFixture(t, dir, "photo.png")
+	a := newTestApp(t, dir)
+	opened := make(chan string, 1)
+	a.openPath = func(path string) error {
+		opened <- path
+		return nil
+	}
+
+	clickTreePath(t, a, textPath)
+	if a.confirmOpen || a.activeTabPtr().IsReadOnly() {
+		t.Fatalf("text tree click confirm=%v readOnly=%v", a.confirmOpen, a.activeTabPtr().IsReadOnly())
+	}
+
+	clickTreePath(t, a, imagePath)
+	if a.confirmOpen || !a.activeTabPtr().IsImage() {
+		t.Fatalf("image tree click confirm=%v image=%v", a.confirmOpen, a.activeTabPtr().IsImage())
+	}
+	assertDefaultAppNotOpened(t, opened)
+}
+
 // TestOpenFile_ExternalInvokesOpenerAndReusesTab covers automatic handoff on
 // first open and repeated explicit selection without duplicate tabs.
 func TestOpenFile_ExternalInvokesOpenerAndReusesTab(t *testing.T) {

@@ -6,6 +6,7 @@
 - **Status:** Approved
 - **Related PRD:** `docs/superpowers/specs/2026-08-01-soft-wrap-prd.md`, version 0.5
 - **Selected approach:** Add a third, read-only tab mode for unsupported files.
+- **Follow-up:** Left file-tree clicks now require confirmation as specified in `docs/superpowers/specs/2026-08-02-tree-external-open-confirmation-design.md`.
 
 ## 1. Goal
 

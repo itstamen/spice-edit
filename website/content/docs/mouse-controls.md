@@ -24,7 +24,7 @@ SpiceEdit is mouse-first. Every UI surface is clickable, draggable, or scrollabl
 | Gesture                                | Effect                                                                 |
 | -------------------------------------- | ---------------------------------------------------------------------- |
 | Left-click on a folder                 | Toggle expand / collapse. Sets the folder as the active folder.        |
-| Left-click on a file                   | Open text/images inline; hand unsupported files to the host default app. |
+| Left-click on a file                   | Open text/images inline; confirm before handing unsupported files to the host default app. |
 | Right-click on a folder                | Per-folder context menu: New File, Rename, Delete, Copy paths.         |
 | Right-click on a file                  | Per-file context menu: Rename, Delete, Copy relative path, Copy absolute. |
 | Scroll wheel                           | Scroll the tree.                                                       |
