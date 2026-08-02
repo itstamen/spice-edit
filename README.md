@@ -190,6 +190,7 @@ within half a second tap one of the letters below.
 | `Esc w`     | Close tab            |
 | `Esc q`     | Quit                 |
 | `Esc n`     | New file             |
+| `Esc o`     | Open with default app |
 | `Esc t`     | Toggle sidebar       |
 | `Esc z`     | Toggle soft wrap     |
 | `Esc /`     | Toggle line comment  |
@@ -202,6 +203,27 @@ so accidental `Esc` taps never swallow a real character.
 
 Everything reachable by hotkey is also reachable from the `≡` menu —
 the hotkeys are just a faster path for the actions you reach for most.
+
+### File types and default applications
+
+SpiceEdit edits UTF-8 text files and previews PNG, JPEG, and the first
+frame of GIF images inside the terminal. Clicking a PDF, office document,
+archive, database, media file, executable, or other unsupported file opens
+it with the default application on the machine running SpiceEdit. The tab
+stays open as a read-only placeholder so the file remains visible in project
+context, and the editor pane displays
+`编辑器只支持文本及图片文件在线编辑.`
+
+Press `Esc o` or choose **Open with default app** from the `≡` menu to hand
+any file-backed text, image, or placeholder tab to the host operating system.
+Dirty text buffers are not saved first; the external application receives the
+current on-disk file.
+
+The handoff uses the native default-application mechanism on macOS and Windows.
+On Linux it requires `xdg-open` or `gio`. In an SSH session, the command runs
+on the remote SpiceEdit host, not on the laptop that owns the terminal. Use a
+custom action when you need to copy a remote file back to a client machine
+before opening it there.
 
 ### Find in file
 

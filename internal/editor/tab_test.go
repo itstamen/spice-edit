@@ -1199,6 +1199,106 @@ func TestTab_RenderSoftWrap_IgnoresScrollX(t *testing.T) {
 	}
 }
 
+// TestTab_HitTestSoftWrap_ContinuationRow maps clicks on wrapped continuation
+// rows back into the same logical line instead of the next buffer line.
+func TestTab_HitTestSoftWrap_ContinuationRow(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("abcdef")
+
+	contentX := defaultGutterWidth + 1
+	pos, ok := tab.HitTestSoftWrap(contentX+1, 1, 10, 4) // content width = 3.
+	if !ok {
+		t.Fatal("expected continuation row hit")
+	}
+	if pos != (Position{Line: 0, Col: 4}) {
+		t.Fatalf("pos = %+v, want line 0 col 4", pos)
+	}
+}
+
+// TestTab_MoveCursorSoftWrap_UpDownWithinLogicalLine keeps vertical movement
+// aligned to what the user sees when one logical line occupies multiple rows.
+func TestTab_MoveCursorSoftWrap_UpDownWithinLogicalLine(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("abcdef")
+	tab.Cursor = Position{Line: 0, Col: 1}
+	tab.Anchor = tab.Cursor
+
+	tab.MoveCursorSoftWrap(1, 10, false) // content width = 3.
+	if tab.Cursor != (Position{Line: 0, Col: 4}) {
+		t.Fatalf("cursor after down = %+v, want line 0 col 4", tab.Cursor)
+	}
+	if tab.Anchor != tab.Cursor {
+		t.Fatalf("anchor should collapse to cursor, got %+v", tab.Anchor)
+	}
+
+	tab.MoveCursorSoftWrap(-1, 10, true)
+	if tab.Cursor != (Position{Line: 0, Col: 1}) {
+		t.Fatalf("cursor after shift-up = %+v, want line 0 col 1", tab.Cursor)
+	}
+	if tab.Anchor != (Position{Line: 0, Col: 4}) {
+		t.Fatalf("anchor should remain at selection start, got %+v", tab.Anchor)
+	}
+}
+
+// TestTab_RenderSoftWrap_UsesVisualScroll renders from WrapScrollY so wheel
+// scrolling can reveal later wrapped rows within the same logical line.
+func TestTab_RenderSoftWrap_UsesVisualScroll(t *testing.T) {
+	scr := newSimScreen(t, 10, 4)
+	defer scr.Fini()
+
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("abcdef")
+	tab.WrapScrollY = 1
+	tab.cursorMoved = false
+
+	tab.RenderSoftWrap(scr, theme.Default(), 0, 0, 10, 4, true)
+	scr.Show()
+	if row := screenRowRunes(scr, 0); !strings.Contains(row, "def") {
+		t.Fatalf("row = %q, want second visual segment", row)
+	}
+}
+
+// TestTab_RenderSoftWrap_SelectionAcrossRows paints selection on each wrapped
+// visual row while preserving the logical buffer selection model.
+func TestTab_RenderSoftWrap_SelectionAcrossRows(t *testing.T) {
+	scr := newSimScreen(t, 10, 4)
+	defer scr.Fini()
+
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("abcdef")
+	tab.Anchor = Position{Line: 0, Col: 1}
+	tab.Cursor = Position{Line: 0, Col: 5}
+	tab.RenderSoftWrap(scr, theme.Default(), 0, 0, 10, 4, true)
+
+	contentX := defaultGutterWidth + 1
+	_, style, _ := scr.Get(contentX+1, 0)
+	_, bg, _ := style.Decompose()
+	if bg != theme.Default().Selection {
+		t.Fatalf("row 0 selection background = %v, want %v", bg, theme.Default().Selection)
+	}
+	_, style, _ = scr.Get(contentX, 1)
+	_, bg, _ = style.Decompose()
+	if bg != theme.Default().Selection {
+		t.Fatalf("row 1 selection background = %v, want %v", bg, theme.Default().Selection)
+	}
+}
+
+// TestTab_HitTestSoftWrap_SecondCJKCellReturnsClusterStart preserves wide
+// grapheme hit testing on continuation rows.
+func TestTab_HitTestSoftWrap_SecondCJKCellReturnsClusterStart(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("中a文")
+
+	contentX := defaultGutterWidth + 1
+	pos, ok := tab.HitTestSoftWrap(contentX+1, 1, 10, 4)
+	if !ok {
+		t.Fatal("expected CJK continuation hit")
+	}
+	if pos != (Position{Line: 0, Col: 2}) {
+		t.Fatalf("pos = %+v, want CJK cluster start at col 2", pos)
+	}
+}
+
 // screenRowRunes returns one row from a SimulationScreen as runes.
 func screenRowRunes(scr tcell.SimulationScreen, y int) string {
 	cells, w, _ := scr.GetContents()

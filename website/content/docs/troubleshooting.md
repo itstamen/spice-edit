@@ -81,6 +81,17 @@ Then run `herdr server reload-config`. If SpiceEdit still reports that graphics 
 
 SpiceEdit previews PNG and JPEG images and the first frame of a GIF. If graphics preparation or presentation fails, SpiceEdit automatically uses the half-block preview.
 
+## An unsupported file did not open in a desktop application
+
+SpiceEdit keeps PDFs, office documents, archives, databases, media files,
+executables, and other non-text formats out of the editable buffer. It shows a
+read-only placeholder and asks the host operating system to open the file.
+
+On Linux, make sure `xdg-open` or `gio` is installed and that the session has
+access to a desktop. Over SSH, the opener runs on the remote host. Press
+`Esc o` to retry the active file; use a custom action if the file must be
+copied to and opened on your laptop instead.
+
 ## I want to see what `Esc t` does
 
 The whole leader table is in the [Hotkeys](/docs/hotkeys/) doc. The action menu also shows the bound combo next to each item, so you can learn the table by using the menu first.

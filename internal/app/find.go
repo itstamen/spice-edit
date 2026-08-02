@@ -33,7 +33,7 @@ const findBarHeight = 1
 // search.
 func (a *App) openFind() {
 	tab := a.activeTabPtr()
-	if tab == nil || tab.IsImage() {
+	if tab == nil || tab.IsReadOnly() {
 		return
 	}
 	a.closeAllModals() // a modal would otherwise eat our keystrokes
@@ -93,11 +93,11 @@ func (a *App) menuFind() {
 	a.openFind()
 }
 
-// hasFindable reports whether the active tab is a text tab — used to
-// gray out the menu row on image tabs / no-tab states.
+// hasFindable reports whether the active tab is editable text, which controls
+// the menu row for image, external, and no-tab states.
 func (a *App) hasFindable() bool {
 	t := a.activeTabPtr()
-	return t != nil && !t.IsImage()
+	return t != nil && !t.IsReadOnly()
 }
 
 // findBarRect returns the on-screen rectangle of the find bar. Always

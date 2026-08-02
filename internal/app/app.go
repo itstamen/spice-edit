@@ -218,6 +218,7 @@ func builtinMenuGroups() [][]menuItemDef {
 		// File actions
 		{
 			{shortcut: "Esc n", action: (*App).menuNewFile, enabled: alwaysTrue, labelFor: (*App).newFileLabel},
+			{label: "Open with default app", shortcut: "Esc o", action: (*App).menuOpenWithDefaultApp, enabled: (*App).hasFileTab},
 			{label: "Rename file", action: (*App).menuRename, enabled: (*App).hasFileTab},
 			{label: "Delete file", action: (*App).menuDelete, enabled: (*App).hasFileTab},
 			{action: (*App).menuRenameFolder, enabled: (*App).hasActiveSubfolder, labelFor: (*App).renameFolderLabel},
@@ -386,6 +387,7 @@ type App struct {
 	clipBuf      string
 	statusMsg    string
 	statusUntil  time.Time
+	openPath     pathOpener
 	dragMode     string // "editor" while a drag-select is active.
 	lastClick    clickRecord
 	lastTabRects []tabRect
@@ -704,7 +706,7 @@ func (a *App) refreshGitStatus() {
 // refreshGitLineChanges refreshes gutter markers for every open text tab.
 func (a *App) refreshGitLineChanges() {
 	for _, tab := range a.tabs {
-		if tab == nil || tab.Path == "" || tab.IsImage() {
+		if tab == nil || tab.Path == "" || tab.IsReadOnly() {
 			continue
 		}
 		tab.GitLines = loadGitLineChanges(a.rootDir, tab.Path)
@@ -1047,6 +1049,8 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.refreshTreeNow()
 	case *customActionDoneEvent:
 		a.handleCustomActionDone(e)
+	case *defaultOpenDoneEvent:
+		a.handleDefaultOpenDone(e)
 	case *formatDoneEvent:
 		a.handleFormatDone(e)
 	case *finderRebuiltEvent:
@@ -1136,7 +1140,7 @@ func splitErrorOutput(runErr error, out []byte) []string {
 // reconcile against.
 func (a *App) reconcileOpenTabsWithDisk() {
 	for _, tab := range a.tabs {
-		if tab.Path == "" {
+		if tab.Path == "" || tab.IsExternal() {
 			continue
 		}
 		info, err := os.Stat(tab.Path)
@@ -1393,19 +1397,30 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	if tab == nil {
 		return
 	}
-	// Image-preview tabs are read-only — no cursor, no editing, no
+	// Read-only tabs have no cursor or editing surface. Leader commands have
+	// already run above, so dropping remaining keys does not block Esc-o.
 	// caret movement. Drop every key here so the user can mash arrow
 	// keys without anything mysterious happening behind the splash.
-	if tab.IsImage() {
+	if tab.IsReadOnly() {
 		return
 	}
 	extend := ev.Modifiers()&tcell.ModShift != 0
 
 	switch ev.Key() {
 	case tcell.KeyUp:
-		tab.MoveCursor(-1, 0, extend)
+		if a.softWrap {
+			ew, _ := a.editorSize()
+			tab.MoveCursorSoftWrap(-1, ew, extend)
+		} else {
+			tab.MoveCursor(-1, 0, extend)
+		}
 	case tcell.KeyDown:
-		tab.MoveCursor(1, 0, extend)
+		if a.softWrap {
+			ew, _ := a.editorSize()
+			tab.MoveCursorSoftWrap(1, ew, extend)
+		} else {
+			tab.MoveCursor(1, 0, extend)
+		}
 	case tcell.KeyLeft:
 		tab.MoveCursor(0, -1, extend)
 	case tcell.KeyRight:
@@ -1415,11 +1430,19 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	case tcell.KeyEnd:
 		tab.MoveLineEnd(extend)
 	case tcell.KeyPgUp:
-		_, h := a.editorSize()
-		tab.MoveCursor(-h, 0, extend)
+		ew, h := a.editorSize()
+		if a.softWrap {
+			tab.MoveCursorSoftWrap(-h, ew, extend)
+		} else {
+			tab.MoveCursor(-h, 0, extend)
+		}
 	case tcell.KeyPgDn:
-		_, h := a.editorSize()
-		tab.MoveCursor(h, 0, extend)
+		ew, h := a.editorSize()
+		if a.softWrap {
+			tab.MoveCursorSoftWrap(h, ew, extend)
+		} else {
+			tab.MoveCursor(h, 0, extend)
+		}
 	case tcell.KeyEnter:
 		tab.InsertString("\n")
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
@@ -1609,7 +1632,15 @@ func (a *App) scrollAt(x, y, delta int) {
 	}
 	if y > 0 && y < a.height-1 {
 		if t := a.activeTabPtr(); t != nil {
-			t.Scroll(delta)
+			if t.IsReadOnly() {
+				return
+			}
+			ew, eh := a.editorSize()
+			if a.softWrap {
+				t.ScrollSoftWrap(delta, ew, eh)
+			} else {
+				t.Scroll(delta)
+			}
 		}
 	}
 }
@@ -1624,7 +1655,10 @@ func (a *App) scrollAtH(x, y, delta int) {
 	}
 	if y > 0 && y < a.height-1 {
 		if t := a.activeTabPtr(); t != nil {
-			if a.softWrap && !t.IsImage() {
+			if t.IsReadOnly() {
+				return
+			}
+			if a.softWrap {
 				return
 			}
 			t.ScrollH(delta)
@@ -1740,14 +1774,14 @@ func (a *App) syncActiveTreeFile() {
 // have no caret, so the press is dropped.
 func (a *App) editorPress(x, y int) {
 	tab := a.activeTabPtr()
-	if tab == nil || tab.IsImage() {
+	if tab == nil || tab.IsReadOnly() {
 		return
 	}
 	ex, ey, ew, eh := a.editorRect()
-	if a.openGitHunkAt(tab, x-ex, y-ey) {
+	if a.openGitHunkAt(tab, x-ex, y-ey, ew, eh) {
 		return
 	}
-	pos, ok := tab.HitTest(x-ex, y-ey, ew, eh)
+	pos, ok := a.editorHitTest(tab, x-ex, y-ey, ew, eh)
 	if !ok {
 		return
 	}
@@ -1763,11 +1797,15 @@ func (a *App) editorPress(x, y int) {
 }
 
 // openGitHunkAt opens a diff preview when the user clicks a gutter marker.
-func (a *App) openGitHunkAt(tab *editor.Tab, localX, localY int) bool {
+func (a *App) openGitHunkAt(tab *editor.Tab, localX, localY, w, h int) bool {
 	if localX != 0 || localY < 0 {
 		return false
 	}
-	line := tab.ScrollY + localY
+	pos, ok := a.editorHitTest(tab, localX, localY, w, h)
+	if !ok {
+		return false
+	}
+	line := pos.Line
 	if tab.GitLines[line] == editor.GitLineNone {
 		return false
 	}
@@ -1788,7 +1826,7 @@ func (a *App) openGitHunkAt(tab *editor.Tab, localX, localY int) bool {
 // drop the drag entirely.
 func (a *App) editorDrag(x, y int) {
 	tab := a.activeTabPtr()
-	if tab == nil || tab.IsImage() {
+	if tab == nil || tab.IsReadOnly() {
 		return
 	}
 	ex, ey, ew, eh := a.editorRect()
@@ -1824,7 +1862,7 @@ func (a *App) editorDrag(x, y int) {
 	if localY >= eh {
 		localY = eh - 1
 	}
-	pos, ok := tab.HitTest(localX, localY, ew, eh)
+	pos, ok := a.editorHitTest(tab, localX, localY, ew, eh)
 	if !ok {
 		return
 	}
@@ -1879,13 +1917,17 @@ func (a *App) handleAutoScroll() {
 		return
 	}
 	tab := a.activeTabPtr()
-	if tab == nil {
+	if tab == nil || tab.IsReadOnly() {
 		a.stopAutoScroll()
 		return
 	}
-	tab.Scroll(a.autoScrollDir)
-
 	ex, _, ew, eh := a.editorRect()
+	if a.softWrap {
+		tab.ScrollSoftWrap(a.autoScrollDir, ew, eh)
+	} else {
+		tab.Scroll(a.autoScrollDir)
+	}
+
 	localX := a.lastDragX - ex
 	if localX < 0 {
 		localX = 0
@@ -1897,11 +1939,22 @@ func (a *App) handleAutoScroll() {
 	if a.autoScrollDir < 0 {
 		localY = 0
 	}
-	pos, ok := tab.HitTest(localX, localY, ew, eh)
+	pos, ok := a.editorHitTest(tab, localX, localY, ew, eh)
 	if !ok {
 		return
 	}
 	tab.MoveCursorTo(pos, true)
+}
+
+// editorHitTest routes coordinate mapping through the active wrapping mode.
+func (a *App) editorHitTest(tab *editor.Tab, localX, localY, w, h int) (editor.Position, bool) {
+	if tab == nil || tab.IsReadOnly() {
+		return editor.Position{}, false
+	}
+	if a.softWrap {
+		return tab.HitTestSoftWrap(localX, localY, w, h)
+	}
+	return tab.HitTest(localX, localY, w, h)
 }
 
 // selectWordAt selects the word under the buffer position p (or does
@@ -1993,7 +2046,12 @@ func (a *App) openFile(path string) {
 	for i, t := range a.tabs {
 		if t.Path == path {
 			a.activeTab = i
-			t.GitLines = loadGitLineChanges(a.rootDir, t.Path)
+			if !t.IsReadOnly() {
+				t.GitLines = loadGitLineChanges(a.rootDir, t.Path)
+			}
+			if t.IsExternal() {
+				a.openPathWithDefaultApp(t.Path)
+			}
 			return
 		}
 	}
@@ -2004,7 +2062,13 @@ func (a *App) openFile(path string) {
 	}
 	a.tabs = append(a.tabs, t)
 	a.activeTab = len(a.tabs) - 1
-	t.GitLines = loadGitLineChanges(a.rootDir, t.Path)
+	if !t.IsReadOnly() {
+		t.GitLines = loadGitLineChanges(a.rootDir, t.Path)
+	}
+	if t.IsExternal() {
+		a.openPathWithDefaultApp(t.Path)
+		return
+	}
 	a.flash(fmt.Sprintf("Opened %s", filepath.Base(path)))
 }
 
@@ -2248,11 +2312,11 @@ func (a *App) updateMenuHover(x, y int) {
 func (a *App) hasTab() bool { return a.activeTabPtr() != nil }
 
 // hasSavableTab reports whether the active tab is one we can persist —
-// it must exist, have a path on disk, and not be a read-only image
-// preview. Used by Save and Save & Close.
+// it must exist, have a path on disk, and expose editable text. Used by Save
+// and Save & Close.
 func (a *App) hasSavableTab() bool {
 	t := a.activeTabPtr()
-	return t != nil && t.Path != "" && !t.IsImage()
+	return t != nil && t.Path != "" && !t.IsReadOnly()
 }
 
 // hasFileTab reports whether the active tab is backed by a real file
@@ -2273,7 +2337,7 @@ func (a *App) hasSelection() bool {
 // known single-line comment marker.
 func (a *App) hasCommentableTab() bool {
 	t := a.activeTabPtr()
-	if t == nil || t.IsImage() {
+	if t == nil || t.IsReadOnly() {
 		return false
 	}
 	_, ok := editor.LineCommentPrefix(t.Path)
@@ -2471,7 +2535,7 @@ func (a *App) menuPaste() {
 func (a *App) menuToggleLineComment() {
 	a.closeMenu()
 	tab := a.activeTabPtr()
-	if tab == nil || tab.IsImage() {
+	if tab == nil || tab.IsReadOnly() {
 		return
 	}
 	changed, ok := tab.ToggleLineComment()
@@ -2484,6 +2548,18 @@ func (a *App) menuToggleLineComment() {
 		return
 	}
 	a.flash("Toggled line comment")
+}
+
+// menuOpenWithDefaultApp opens the active file-backed tab through the host
+// operating system without saving or otherwise mutating editor state.
+func (a *App) menuOpenWithDefaultApp() {
+	a.closeMenu()
+	tab := a.activeTabPtr()
+	if tab == nil || tab.Path == "" {
+		a.flash("No file to open with default app")
+		return
+	}
+	a.openPathWithDefaultApp(tab.Path)
 }
 
 // menuRefreshTree forces an immediate sidebar reload. Currently unwired
@@ -2520,7 +2596,7 @@ func (a *App) menuToggleSoftWrap() {
 	a.softWrap = !a.softWrap
 	if a.softWrap {
 		for _, tab := range a.tabs {
-			if tab != nil && !tab.IsImage() {
+			if tab != nil && !tab.IsReadOnly() {
 				tab.ScrollX = 0
 			}
 		}
@@ -2855,7 +2931,9 @@ func (a *App) drawStatusBar() {
 	if time.Now().Before(a.statusUntil) && a.statusMsg != "" {
 		left = " " + a.statusMsg
 	} else if tab := a.activeTabPtr(); tab != nil {
-		if tab.IsImage() && tab.Image != nil {
+		if tab.IsExternal() {
+			left = fmt.Sprintf(" EXTERNAL · %s", filepath.Base(tab.Path))
+		} else if tab.IsImage() && tab.Image != nil {
 			b := tab.Image.Bounds()
 			left = fmt.Sprintf(" %s · %d×%d · %s",
 				strings.ToUpper(tab.ImageFmt), b.Dx(), b.Dy(), filepath.Base(tab.Path))

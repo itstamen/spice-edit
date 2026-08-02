@@ -1181,7 +1181,7 @@ func TestOpenGitHunkAt_OpensInfoOnMarker(t *testing.T) {
 	tab := a.activeTabPtr()
 	tab.GitLines = map[int]editor.GitLineChange{0: editor.GitLineModified}
 
-	if !a.openGitHunkAt(tab, 0, 0) {
+	if !a.openGitHunkAt(tab, 0, 0, 40, 10) {
 		t.Fatal("expected gutter marker click to be handled")
 	}
 	if !a.confirmOpen || !a.confirmInfo {
@@ -1196,7 +1196,7 @@ func TestOpenGitHunkAt_IgnoresCleanGutter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTab: %v", err)
 	}
-	if a.openGitHunkAt(tab, 0, 0) {
+	if a.openGitHunkAt(tab, 0, 0, 40, 10) {
 		t.Fatal("clean gutter should not be handled as a git preview")
 	}
 }
@@ -1442,6 +1442,10 @@ func TestHandleMouse_SoftWrapIgnoresHorizontalWheel(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	a := newTestApp(t, dir)
+	a.width = 30
+	a.height = 8
+	a.sidebarShown = false
+	a.screen.(tcell.SimulationScreen).SetSize(a.width, a.height)
 	a.openFile(target)
 	a.softWrap = true
 	tab := a.activeTabPtr()
@@ -1454,6 +1458,63 @@ func TestHandleMouse_SoftWrapIgnoresHorizontalWheel(t *testing.T) {
 	a.handleMouse(tcell.NewEventMouse(editorX, 5, tcell.WheelDown, tcell.ModShift))
 	if tab.ScrollX != 0 {
 		t.Fatalf("Shift+WheelDown with soft wrap should not move ScrollX, got %d", tab.ScrollX)
+	}
+}
+
+// TestHandleMouse_SoftWrapWheelScrollsVisualRows ensures vertical wheel
+// scrolling advances through wrapped visual rows, not only logical lines.
+func TestHandleMouse_SoftWrapWheelScrollsVisualRows(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "long.txt")
+	if err := os.WriteFile(target, []byte(strings.Repeat("x", 200)+"\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.width = 30
+	a.height = 8
+	a.sidebarShown = false
+	a.screen.(tcell.SimulationScreen).SetSize(a.width, a.height)
+	a.openFile(target)
+	a.softWrap = true
+	tab := a.activeTabPtr()
+	editorX := a.sidebarW() + 10
+
+	a.handleMouse(tcell.NewEventMouse(editorX, 5, tcell.WheelDown, tcell.ModNone))
+	if tab.WrapScrollY == 0 {
+		t.Fatal("WheelDown with soft wrap should move WrapScrollY")
+	}
+	if tab.ScrollX != 0 {
+		t.Fatalf("WheelDown with soft wrap should not move ScrollX, got %d", tab.ScrollX)
+	}
+}
+
+// TestHandleKey_SoftWrapPageDownMovesVisualRows keeps PgDn aligned with the
+// wrapped screen rows rather than jumping logical lines.
+func TestHandleKey_SoftWrapPageDownMovesVisualRows(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "long.txt")
+	if err := os.WriteFile(target, []byte(strings.Repeat("a", 200)), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.width = 30
+	a.height = 10
+	a.sidebarShown = false
+	a.screen.(tcell.SimulationScreen).SetSize(a.width, a.height)
+	a.openFile(target)
+	a.softWrap = true
+	tab := a.activeTabPtr()
+	_, h := a.editorSize()
+
+	a.handleKey(keyEv(tcell.KeyPgDn, 0))
+	if tab.Cursor.Line != 0 {
+		t.Fatalf("PgDn should stay in the long logical line, got line %d", tab.Cursor.Line)
+	}
+	if tab.Cursor.Col == 0 {
+		t.Fatal("PgDn with soft wrap should advance cursor by visual rows")
+	}
+	if tab.Cursor.Col < h {
+		t.Fatalf("cursor col = %d, want movement by page of visual rows", tab.Cursor.Col)
 	}
 }
 
@@ -1718,13 +1779,13 @@ func TestMenuLayout_NoCustomActions(t *testing.T) {
 	a.customActions = nil
 	items, dividers, h := a.menuLayout()
 
-	if h != 32 {
-		t.Errorf("modalHeight = %d, want 32", h)
+	if h != 33 {
+		t.Errorf("modalHeight = %d, want 33", h)
 	}
-	if got := len(items); got != 22 {
-		t.Errorf("item count = %d, want 22 built-ins", got)
+	if got := len(items); got != 23 {
+		t.Errorf("item count = %d, want 23 built-ins", got)
 	}
-	wantDiv := []int{2, 6, 10, 13, 21, 26, 29}
+	wantDiv := []int{2, 6, 10, 13, 22, 27, 30}
 	if len(dividers) != len(wantDiv) {
 		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
 	}
@@ -1908,8 +1969,8 @@ func TestMenuLayout_WithCustomActions(t *testing.T) {
 	}
 	items, _, h := a.menuLayout()
 
-	if h != 35 { // 32 + 2 items + 1 divider
-		t.Errorf("modalHeight = %d, want 35", h)
+	if h != 36 { // 33 + 2 items + 1 divider
+		t.Errorf("modalHeight = %d, want 36", h)
 	}
 	// Custom actions should be the second-to-last and third-to-last
 	// rows, with Quit as the final row.

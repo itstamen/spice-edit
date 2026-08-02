@@ -58,16 +58,17 @@ const (
 // the per-tab view state (scroll position, cursor, selection anchor), the
 // cached syntax-highlight styles, and a dirty flag.
 type Tab struct {
-	Path       string // Empty for an unsaved/scratch tab.
-	Buffer     *Buffer
-	Cursor     Position // Where new typed text appears.
-	Anchor     Position // Selection anchor; equals Cursor when nothing is selected.
-	ScrollY    int      // Index of the first visible line.
-	ScrollX    int      // Index of the first visible column (rune-indexed).
-	Dirty      bool
-	Styles     [][]tcell.Style
-	StyleStale bool
-	GitLines   map[int]GitLineChange
+	Path        string // Empty for an unsaved/scratch tab.
+	Buffer      *Buffer
+	Cursor      Position // Where new typed text appears.
+	Anchor      Position // Selection anchor; equals Cursor when nothing is selected.
+	ScrollY     int      // Index of the first visible line.
+	WrapScrollY int      // Index of the first visible soft-wrapped visual row.
+	ScrollX     int      // Index of the first visible column (rune-indexed).
+	Dirty       bool
+	Styles      [][]tcell.Style
+	StyleStale  bool
+	GitLines    map[int]GitLineChange
 
 	// lastHighlightScrollY / lastHighlightHeight record the viewport Render
 	// last tokenised for. Without them, every redraw (mouse moves included)
@@ -103,11 +104,9 @@ type Tab struct {
 	lastUndoGroup undoGroup
 	lastUndoAt    time.Time
 
-	// Mode is "" for a normal text tab and imageMode (= "image") for a
-	// read-only image preview. Image tabs reuse the Tab type so the
-	// app's tab list, switcher, and modal-routing all just work — the
-	// content-mutating methods short-circuit on imageMode and Render
-	// delegates to RenderImageFallback. See image.go for the render path.
+	// Mode is "" for editable text, imageMode for an inline image preview,
+	// or externalMode for a file delegated to the host application. Read-only
+	// tabs reuse Tab so tab switching and modal routing stay shared.
 	Mode     string
 	Image    image.Image // populated when Mode == imageMode
 	ImageFmt string      // "png" / "jpeg" / "gif" — for the status bar
@@ -135,14 +134,22 @@ type Tab struct {
 	IndentUnit string
 }
 
-// NewTab opens path and returns a Tab. If the file does not exist, the tab
-// is created with an empty buffer that will be written on first save —
-// matching what most editors do when you "open" a brand-new file path.
-// When path looks like an image we recognise (PNG / JPEG / GIF), the tab
-// is opened in read-only image-preview mode instead of as text.
+// NewTab opens path as editable text, an inline image, or a read-only external
+// placeholder. Missing paths remain empty text tabs for the New File workflow.
 func NewTab(path string) (*Tab, error) {
-	if path != "" && isImageExt(path) {
-		return newImageTab(path)
+	kind, err := classifyFile(path)
+	if err != nil {
+		return nil, err
+	}
+	switch kind {
+	case fileKindImage:
+		t, imageErr := newImageTab(path)
+		if imageErr != nil {
+			return newExternalTab(path), nil
+		}
+		return t, nil
+	case fileKindExternal:
+		return newExternalTab(path), nil
 	}
 	var data []byte
 	var mtime time.Time
@@ -232,11 +239,11 @@ func (t *Tab) DisplayName() string {
 // Save writes the buffer to disk and clears Dirty. It is an error to call
 // Save on an untitled tab — callers should prompt for a path first. Mtime
 // is refreshed so the disk-reconcile loop doesn't immediately think the
-// file we just wrote was changed by someone else. Image tabs return an
-// error since the editor only knows how to read those, not re-encode them.
+// file we just wrote was changed by someone else. Read-only tabs return an
+// error because they have no editable text buffer to persist.
 func (t *Tab) Save() error {
-	if t.IsImage() {
-		return fmt.Errorf("image tabs are read-only")
+	if t.IsReadOnly() {
+		return fmt.Errorf("read-only tabs cannot be saved")
 	}
 	if t.Path == "" {
 		return fmt.Errorf("no path set for tab")
@@ -260,8 +267,8 @@ func (t *Tab) Save() error {
 // are clamped to the new content (so the user keeps roughly their place
 // instead of getting snapped to line 0); ScrollY is left alone and gets
 // clamped on the next render. Dirty is cleared and the syntax cache is
-// invalidated. Image tabs decode the file again instead of replacing
-// the text buffer.
+// invalidated. Image tabs decode the file again instead of replacing the text
+// buffer, while external tabs remain delegated to the host application.
 func (t *Tab) Reload() error {
 	if t.Path == "" {
 		return fmt.Errorf("no path set for tab")
@@ -281,6 +288,9 @@ func (t *Tab) Reload() error {
 		t.Mtime = info.ModTime()
 		t.DiskGone = false
 		return nil
+	}
+	if t.IsExternal() {
+		return fmt.Errorf("external tabs are read-only")
 	}
 	data, err := os.ReadFile(t.Path)
 	if err != nil {
@@ -323,7 +333,7 @@ func (t *Tab) SelectionText() string {
 // DeleteSelection removes the selected range and collapses the cursor to the
 // start of the selection. A no-op when nothing is selected.
 func (t *Tab) DeleteSelection() {
-	if t.IsImage() || !t.HasSelection() {
+	if t.IsReadOnly() || !t.HasSelection() {
 		return
 	}
 	// Selection deletes are always their own undo step — they can wipe
@@ -342,9 +352,9 @@ func (t *Tab) DeleteSelection() {
 // InsertString inserts s at the cursor (replacing any selection first) and
 // advances the cursor past the inserted text. Always recorded as a
 // structural undo step — pasted text or "\n" presses shouldn't merge
-// with the surrounding typing burst. No-op on image tabs.
+// with the surrounding typing burst. No-op on read-only tabs.
 func (t *Tab) InsertString(s string) {
-	if t.IsImage() {
+	if t.IsReadOnly() {
 		return
 	}
 	if t.HasSelection() {
@@ -365,9 +375,9 @@ func (t *Tab) InsertString(s string) {
 // InsertRune inserts a single typed character at the cursor. Coalesces
 // with adjacent runes inside the undo window so a typed word collapses
 // into a single undo step rather than one entry per keystroke. No-op
-// on image tabs.
+// on read-only tabs.
 func (t *Tab) InsertRune(r rune) {
-	if t.IsImage() {
+	if t.IsReadOnly() {
 		return
 	}
 	if t.HasSelection() {
@@ -386,9 +396,9 @@ func (t *Tab) InsertRune(r rune) {
 
 // Backspace deletes the character before the cursor (or the selection if any).
 // Coalesces with adjacent backspaces inside the undo window. No-op on
-// image tabs.
+// read-only tabs.
 func (t *Tab) Backspace() {
-	if t.IsImage() {
+	if t.IsReadOnly() {
 		return
 	}
 	if t.HasSelection() {
@@ -415,9 +425,9 @@ func (t *Tab) Backspace() {
 
 // Delete removes the character after the cursor (or the selection if any).
 // Coalesces with adjacent forward-deletes inside the undo window. No-op
-// on image tabs.
+// on read-only tabs.
 func (t *Tab) Delete() {
-	if t.IsImage() {
+	if t.IsReadOnly() {
 		return
 	}
 	if t.HasSelection() {
@@ -489,6 +499,18 @@ func (t *Tab) MoveCursor(dLine, dCol int, extend bool) {
 	t.cursorMoved = true
 	// Cursor moved on the user's explicit command — close any open
 	// coalescing window so the next typing burst is a fresh undo step.
+	t.breakUndoGroup()
+}
+
+// MoveCursorSoftWrap shifts the cursor vertically by wrapped visual rows.
+func (t *Tab) MoveCursorSoftWrap(dRows, viewW int, extend bool) {
+	contentW := viewW - gutterWidthFor(t.Buffer.LineCount()) - 1
+	rowIdx, targetCell := t.visualRowForPosition(t.Cursor, contentW)
+	t.Cursor = t.positionAtVisualRow(rowIdx+dRows, targetCell, contentW)
+	if !extend {
+		t.Anchor = t.Cursor
+	}
+	t.cursorMoved = true
 	t.breakUndoGroup()
 }
 
@@ -578,6 +600,10 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 // highlighting, selection, cursor) into the rectangle (x, y, w, h). Image tabs
 // delegate to RenderImageFallback instead of drawing text.
 func (t *Tab) RenderSoftWrap(scr tcell.Screen, th theme.Theme, x, y, w, h int, softWrap bool) {
+	if t.IsExternal() {
+		t.RenderExternal(scr, th, x, y, w, h)
+		return
+	}
 	if t.IsImage() {
 		t.RenderImageFallback(scr, th, x, y, w, h)
 		return
@@ -592,20 +618,39 @@ func (t *Tab) RenderSoftWrap(scr tcell.Screen, th theme.Theme, x, y, w, h int, s
 		}
 		t.cursorMoved = false
 	}
+	gw := gutterWidthFor(t.Buffer.LineCount())
+	contentX := x + gw + 1
+	contentW := w - gw - 1
+	if contentW < 1 {
+		contentW = 1
+	}
+
+	var wrapRows []wrapRow
+	highlightStart, highlightHeight := t.ScrollY, h
 	if softWrap {
 		t.ScrollX = 0
+		wrapRows = t.clampWrapScroll(contentW, h)
+		if t.WrapScrollY < len(wrapRows) {
+			highlightStart = wrapRows[t.WrapScrollY].line
+			lastRow := t.WrapScrollY + h - 1
+			if lastRow >= len(wrapRows) {
+				lastRow = len(wrapRows) - 1
+			}
+			highlightHeight = wrapRows[lastRow].line - highlightStart + 1
+		}
+	} else {
+		t.clampScroll(h)
 	}
-	t.clampScroll(h)
 	// Re-tokenise only when the content changed (StyleStale) or the viewport
 	// shifted (scroll / height). Otherwise every redraw, including mouse
 	// moves, would re-tokenise the visible rows for nothing. The grid is
 	// indexed by absolute line number and only carries the visible rows, so
 	// a scroll change means different rows must be filled.
-	if t.StyleStale || t.ScrollY != t.lastHighlightScrollY || h != t.lastHighlightHeight {
-		t.Styles = HighlightVisible(t.Path, t.Buffer.Lines, t.ScrollY, h, th)
+	if t.StyleStale || highlightStart != t.lastHighlightScrollY || highlightHeight != t.lastHighlightHeight {
+		t.Styles = HighlightVisible(t.Path, t.Buffer.Lines, highlightStart, highlightHeight, th)
 		t.StyleStale = false
-		t.lastHighlightScrollY = t.ScrollY
-		t.lastHighlightHeight = h
+		t.lastHighlightScrollY = highlightStart
+		t.lastHighlightHeight = highlightHeight
 	}
 
 	bg := th.BG
@@ -622,59 +667,145 @@ func (t *Tab) RenderSoftWrap(scr tcell.Screen, th theme.Theme, x, y, w, h int, s
 	selStart, selEnd := PosOrdered(t.Anchor, t.Cursor)
 	hasSel := t.HasSelection()
 
-	gw := gutterWidthFor(t.Buffer.LineCount())
-	contentX := x + gw + 1
-	contentW := w - gw - 1
-	if contentW < 1 {
-		contentW = 1
-	}
-
 	cursorVisible := false
 	cursorX, cursorY := 0, 0
 	row := 0
-	for lineIdx := t.ScrollY; lineIdx < t.Buffer.LineCount() && row < h; lineIdx++ {
-		runes := []rune(t.Buffer.Lines[lineIdx])
-		segments := []wrapSegment{{
-			startRune:   0,
-			endRune:     len(runes),
-			startVisual: 0,
-			width:       LineVisualCol(runes, len(runes)),
-		}}
-		if softWrap {
-			segments = wrapLine(runes, contentW)
+	if !softWrap {
+		for lineIdx := t.ScrollY; lineIdx < t.Buffer.LineCount() && row < h; lineIdx++ {
+			runes := []rune(t.Buffer.Lines[lineIdx])
+			segments := []wrapSegment{{
+				startRune:   0,
+				endRune:     len(runes),
+				startVisual: 0,
+				width:       LineVisualCol(runes, len(runes)),
+			}}
+			for segIdx, segment := range segments {
+				if row >= h {
+					break
+				}
+				if lineIdx >= t.Buffer.LineCount() {
+					break
+				}
+				cy := y + row
+				isCursorLine := lineIdx == t.Cursor.Line
+
+				// Pick the row background — a hair lighter on the cursor's line so
+				// the eye can catch where the caret is from across the screen.
+				lineBg := bg
+				if isCursorLine {
+					lineBg = th.LineHL
+				}
+				lineBgStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Text)
+
+				// Re-paint this row with its (possibly highlighted) bg.
+				for cx := x; cx < x+w; cx++ {
+					scr.SetContent(cx, cy, ' ', nil, lineBgStyle)
+				}
+
+				// Gutter / line number, right-aligned with one trailing space.
+				// Wrapped continuation rows keep the gutter blank so the logical
+				// line number is not repeated as if it were a real buffer line.
+				numStr := fmt.Sprintf("%*d", gw-1, lineIdx+1)
+				gutterStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Muted)
+				if isCursorLine {
+					gutterStyle = gutterStyle.Foreground(th.AccentSoft)
+				}
+				if segIdx == 0 {
+					if marker, ok := t.GitLines[lineIdx]; ok && marker != GitLineNone {
+						scr.SetContent(x, cy, gitLineMarkerRune(marker), nil, gutterStyle.Foreground(gitLineMarkerColor(th, marker)))
+					}
+					for i, r := range numStr {
+						if i == 0 && t.GitLines[lineIdx] != GitLineNone {
+							continue
+						}
+						scr.SetContent(x+i, cy, r, nil, gutterStyle)
+					}
+				}
+
+				// Line content, with syntax styles, selection bg, and line bg. We
+				// walk graphemes from the start of the line so tab stops anchor to
+				// column 0 and every wide glyph owns all of its terminal cells.
+				var styles []tcell.Style
+				if lineIdx < len(t.Styles) {
+					styles = t.Styles[lineIdx]
+				}
+				lineScrollX := 0
+				if !softWrap {
+					lineScrollX = normalizedRuneCol(runes, t.ScrollX)
+				}
+				scrollVisual := LineVisualCol(runes, lineScrollX)
+				if softWrap {
+					scrollVisual = segment.startVisual
+				}
+				visualCol := 0 // visual cell offset from the start of the LINE
+				for _, cluster := range lineClusters(runes) {
+					width := clusterVisualWidth(cluster, visualCol)
+					screenCol := visualCol - scrollVisual
+					inSegment := cluster.EndRune > segment.startRune && cluster.StartRune < segment.endRune
+					if inSegment && cluster.EndRune > lineScrollX && screenCol >= 0 && screenCol+width <= contentW {
+						style := t.clusterStyle(lineIdx, cluster, styles, selStart, selEnd, hasSel, lineBg, th)
+						if cluster.Text == "\t" {
+							drawTabCells(scr, contentX+screenCol, cy, width, style)
+						} else {
+							termtext.DrawCluster(scr, contentX+screenCol, cy, contentW-screenCol, cluster, style)
+						}
+					}
+					visualCol += width
+				}
+
+				// Overflow affordance: paint a muted '‹' / '›' over the leftmost /
+				// rightmost content cell when the line extends past the viewport
+				// in that direction. Without this hint a terminal user has no way
+				// to tell that more content exists off-screen — there's no
+				// scrollbar to clue them in. visualCol now equals the total
+				// visual width of the line; scrollVisual is the visual cell
+				// corresponding to ScrollX.
+				overflowStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Muted)
+				if !softWrap && lineScrollX > 0 {
+					scr.SetContent(contentX, cy, '‹', nil, overflowStyle)
+				}
+				if !softWrap && visualCol-scrollVisual > contentW {
+					scr.SetContent(contentX+contentW-1, cy, '›', nil, overflowStyle)
+				}
+				if isCursorLine && cursorInSegment(t.Cursor.Col, segment, segIdx == len(segments)-1) {
+					cursorRunes := t.Buffer.LineRunes(t.Cursor.Line)
+					cursorVisual := LineVisualCol(cursorRunes, t.Cursor.Col)
+					cx := contentX + (cursorVisual - scrollVisual)
+					if cx >= contentX && cx < contentX+contentW {
+						cursorX, cursorY = cx, cy
+						cursorVisible = true
+					}
+				}
+				row++
+			}
 		}
-		for segIdx, segment := range segments {
-			if row >= h {
-				break
-			}
-			if lineIdx >= t.Buffer.LineCount() {
-				break
-			}
+	}
+	if softWrap {
+		row = 0
+		for wrapIdx := t.WrapScrollY; wrapIdx < len(wrapRows) && row < h; wrapIdx++ {
+			wrapRow := wrapRows[wrapIdx]
+			lineIdx := wrapRow.line
+			runes := []rune(t.Buffer.Lines[lineIdx])
+			segment := wrapRow.wrapSegment
 			cy := y + row
 			isCursorLine := lineIdx == t.Cursor.Line
 
-			// Pick the row background — a hair lighter on the cursor's line so
-			// the eye can catch where the caret is from across the screen.
 			lineBg := bg
 			if isCursorLine {
 				lineBg = th.LineHL
 			}
 			lineBgStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Text)
-
-			// Re-paint this row with its (possibly highlighted) bg.
 			for cx := x; cx < x+w; cx++ {
 				scr.SetContent(cx, cy, ' ', nil, lineBgStyle)
 			}
 
-			// Gutter / line number, right-aligned with one trailing space.
-			// Wrapped continuation rows keep the gutter blank so the logical
-			// line number is not repeated as if it were a real buffer line.
 			numStr := fmt.Sprintf("%*d", gw-1, lineIdx+1)
 			gutterStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Muted)
 			if isCursorLine {
 				gutterStyle = gutterStyle.Foreground(th.AccentSoft)
 			}
-			if segIdx == 0 {
+			firstSegment := wrapIdx == 0 || wrapRows[wrapIdx-1].line != lineIdx
+			if firstSegment {
 				if marker, ok := t.GitLines[lineIdx]; ok && marker != GitLineNone {
 					scr.SetContent(x, cy, gitLineMarkerRune(marker), nil, gutterStyle.Foreground(gitLineMarkerColor(th, marker)))
 				}
@@ -686,27 +817,16 @@ func (t *Tab) RenderSoftWrap(scr tcell.Screen, th theme.Theme, x, y, w, h int, s
 				}
 			}
 
-			// Line content, with syntax styles, selection bg, and line bg. We
-			// walk graphemes from the start of the line so tab stops anchor to
-			// column 0 and every wide glyph owns all of its terminal cells.
 			var styles []tcell.Style
 			if lineIdx < len(t.Styles) {
 				styles = t.Styles[lineIdx]
 			}
-			lineScrollX := 0
-			if !softWrap {
-				lineScrollX = normalizedRuneCol(runes, t.ScrollX)
-			}
-			scrollVisual := LineVisualCol(runes, lineScrollX)
-			if softWrap {
-				scrollVisual = segment.startVisual
-			}
-			visualCol := 0 // visual cell offset from the start of the LINE
+			visualCol := 0
 			for _, cluster := range lineClusters(runes) {
 				width := clusterVisualWidth(cluster, visualCol)
-				screenCol := visualCol - scrollVisual
+				screenCol := visualCol - segment.startVisual
 				inSegment := cluster.EndRune > segment.startRune && cluster.StartRune < segment.endRune
-				if inSegment && cluster.EndRune > lineScrollX && screenCol >= 0 && screenCol+width <= contentW {
+				if inSegment && screenCol >= 0 && screenCol+width <= contentW {
 					style := t.clusterStyle(lineIdx, cluster, styles, selStart, selEnd, hasSel, lineBg, th)
 					if cluster.Text == "\t" {
 						drawTabCells(scr, contentX+screenCol, cy, width, style)
@@ -717,24 +837,11 @@ func (t *Tab) RenderSoftWrap(scr tcell.Screen, th theme.Theme, x, y, w, h int, s
 				visualCol += width
 			}
 
-			// Overflow affordance: paint a muted '‹' / '›' over the leftmost /
-			// rightmost content cell when the line extends past the viewport
-			// in that direction. Without this hint a terminal user has no way
-			// to tell that more content exists off-screen — there's no
-			// scrollbar to clue them in. visualCol now equals the total
-			// visual width of the line; scrollVisual is the visual cell
-			// corresponding to ScrollX.
-			overflowStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Muted)
-			if !softWrap && lineScrollX > 0 {
-				scr.SetContent(contentX, cy, '‹', nil, overflowStyle)
-			}
-			if !softWrap && visualCol-scrollVisual > contentW {
-				scr.SetContent(contentX+contentW-1, cy, '›', nil, overflowStyle)
-			}
-			if isCursorLine && cursorInSegment(t.Cursor.Col, segment, segIdx == len(segments)-1) {
+			lastSegment := wrapIdx == len(wrapRows)-1 || wrapRows[wrapIdx+1].line != lineIdx
+			if isCursorLine && cursorInSegment(t.Cursor.Col, segment, lastSegment) {
 				cursorRunes := t.Buffer.LineRunes(t.Cursor.Line)
 				cursorVisual := LineVisualCol(cursorRunes, t.Cursor.Col)
-				cx := contentX + (cursorVisual - scrollVisual)
+				cx := contentX + (cursorVisual - segment.startVisual)
 				if cx >= contentX && cx < contentX+contentW {
 					cursorX, cursorY = cx, cy
 					cursorVisible = true
@@ -771,15 +878,15 @@ func (t *Tab) RenderSoftWrap(scr tcell.Screen, th theme.Theme, x, y, w, h int, s
 // viewport. V1 soft wrap deliberately keeps ScrollY logical-line based; precise
 // visual-row scrolling inside one long wrapped line is deferred.
 func (t *Tab) EnsureVisibleSoftWrap(viewW, viewH int) {
-	if t.Cursor.Line < t.ScrollY {
-		t.ScrollY = t.Cursor.Line
+	contentW := viewW - gutterWidthFor(t.Buffer.LineCount()) - 1
+	rowIdx, _ := t.visualRowForPosition(t.Cursor, contentW)
+	if rowIdx < t.WrapScrollY {
+		t.WrapScrollY = rowIdx
 	}
-	if t.Cursor.Line >= t.ScrollY+viewH {
-		t.ScrollY = t.Cursor.Line - viewH + 1
+	if rowIdx >= t.WrapScrollY+viewH {
+		t.WrapScrollY = rowIdx - viewH + 1
 	}
-	if t.ScrollY < 0 {
-		t.ScrollY = 0
-	}
+	t.clampWrapScroll(contentW, viewH)
 	t.ScrollX = 0
 }
 
@@ -880,6 +987,24 @@ func (t *Tab) HitTest(localX, localY, w, h int) (Position, bool) {
 	return Position{Line: line, Col: col}, true
 }
 
+// HitTestSoftWrap converts coordinates to a buffer position using visual rows.
+func (t *Tab) HitTestSoftWrap(localX, localY, w, h int) (Position, bool) {
+	if localY < 0 || localY >= h {
+		return Position{}, false
+	}
+	contentX := gutterWidthFor(t.Buffer.LineCount()) + 1
+	contentW := w - contentX
+	rows := t.clampWrapScroll(contentW, h)
+	rowIdx := t.WrapScrollY + localY
+	if rowIdx < 0 || rowIdx >= len(rows) {
+		return Position{}, false
+	}
+	if localX < contentX {
+		return Position{Line: rows[rowIdx].line, Col: rows[rowIdx].startRune}, true
+	}
+	return t.positionAtVisualRow(rowIdx, localX-contentX, contentW), true
+}
+
 // Scroll moves the viewport by delta lines (negative = up). Render runs
 // clampScroll afterwards so the user never scrolls into pure void; here we
 // just adjust the raw value.
@@ -888,6 +1013,13 @@ func (t *Tab) Scroll(deltaLines int) {
 	if t.ScrollY < 0 {
 		t.ScrollY = 0
 	}
+}
+
+// ScrollSoftWrap moves the viewport by wrapped visual rows.
+func (t *Tab) ScrollSoftWrap(deltaRows, viewW, viewH int) {
+	contentW := viewW - gutterWidthFor(t.Buffer.LineCount()) - 1
+	t.WrapScrollY += deltaRows
+	t.clampWrapScroll(contentW, viewH)
 }
 
 // ScrollH moves the viewport horizontally by delta terminal cells (negative

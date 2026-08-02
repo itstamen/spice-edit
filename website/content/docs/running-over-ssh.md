@@ -20,6 +20,17 @@ spiceedit ~/code/some-project
 
 That's it. SpiceEdit is now running on the remote box, sharing the SSH channel with the rest of your terminal traffic.
 
+## Default applications run on the remote host
+
+When SpiceEdit opens an unsupported file automatically, or when you press
+`Esc o`, it asks the operating system running SpiceEdit to open that path. In
+an SSH session that is the remote box, not your laptop. A headless server may
+have no desktop opener, in which case the status bar reports the failure and
+the read-only placeholder tab remains open.
+
+To open the file on your laptop, use a [custom action](/docs/custom-actions/)
+that copies the file back over SSH and then launches it on the client machine.
+
 ## Install on the remote box
 
 The one-liner installer works on every Linux you'll ever SSH into — Alpine, BusyBox, Debian, Ubuntu, RHEL, Arch:

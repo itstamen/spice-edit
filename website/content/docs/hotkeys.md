@@ -21,11 +21,16 @@ So `Esc` is the leader. Tap `Esc`, then within half a second tap a bound letter.
 | `Esc w`     | Close tab             |
 | `Esc q`     | Quit                  |
 | `Esc n`     | New file              |
+| `Esc o`     | Open with default app |
 | `Esc t`     | Toggle sidebar        |
 | `Esc z`     | Toggle soft wrap      |
 | `Esc /`     | Toggle line comment   |
 | `Esc f`     | Find in file          |
 | `Esc p`     | Find file in project  |
+
+`Esc o` opens the active tab's on-disk path with the default application on
+the machine running SpiceEdit. It works for text, image, and unsupported-file
+placeholder tabs and never saves a dirty text buffer first.
 
 ## Editor keys (no Esc needed)
 

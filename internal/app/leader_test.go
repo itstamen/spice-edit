@@ -133,6 +133,36 @@ func TestHandleKey_LeaderToggleSoftWrap(t *testing.T) {
 	}
 }
 
+// TestHandleKey_LeaderOpenWithDefaultApp verifies Esc-o reaches the same
+// opener path used by the main menu.
+func TestHandleKey_LeaderOpenWithDefaultApp(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(target, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	opened := make(chan string, 1)
+	a.openPath = func(path string) error {
+		opened <- path
+		return nil
+	}
+
+	a.handleKey(keyEv(tcell.KeyEsc, 0))
+	a.handleKey(keyEv(tcell.KeyRune, 'o'))
+
+	select {
+	case got := <-opened:
+		if got != target {
+			t.Fatalf("opened path = %q, want %q", got, target)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Esc-o did not invoke opener")
+	}
+	a.handleEvent(waitForDefaultOpenDone(t, a))
+}
+
 // TestHandleKey_LeaderToggleLineComment binds Esc-/ to the same action menu
 // path, giving keyboard users a fast toggle without adding Ctrl shortcuts.
 func TestHandleKey_LeaderToggleLineComment(t *testing.T) {
