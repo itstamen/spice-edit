@@ -3,7 +3,7 @@
 ## Document information
 
 - **Date:** 2026-08-02
-- **Status:** Proposed
+- **Status:** Approved
 - **Related code:** `internal/app/app.go`, `internal/editor/tab.go`
 - **Selected approach:** Reload every clean text tab on repeated open and confirm before replacing a dirty buffer.
 

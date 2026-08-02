@@ -2065,11 +2065,12 @@ func (a *App) openFileWithExternalPolicy(path string, policy externalOpenPolicy)
 	for i, t := range a.tabs {
 		if t.Path == path {
 			a.activeTab = i
-			if !t.IsReadOnly() {
-				t.GitLines = loadGitLineChanges(a.rootDir, t.Path)
-			}
 			if t.IsExternal() {
 				a.handleExternalFileOpen(t.Path, policy)
+				return
+			}
+			if !t.IsReadOnly() {
+				a.reopenTextTab(t)
 			}
 			return
 		}
@@ -2104,6 +2105,33 @@ func (a *App) handleExternalFileOpen(path string, policy externalOpenPolicy) {
 		return
 	}
 	a.openPathWithDefaultApp(path)
+}
+
+// reopenTextTab reloads a clean existing text tab immediately and asks before
+// replacing unsaved edits in a dirty tab.
+func (a *App) reopenTextTab(tab *editor.Tab) {
+	if tab.Dirty {
+		name := tab.DisplayName()
+		a.openConfirm(
+			"Reload file from disk?",
+			fmt.Sprintf("Reload %s and discard unsaved changes?", name),
+			func(app *App) { app.reloadTextTabFromDisk(tab) },
+		)
+		return
+	}
+	a.reloadTextTabFromDisk(tab)
+}
+
+// reloadTextTabFromDisk replaces one text buffer with the latest disk contents
+// and refreshes the Git gutter only after the read succeeds.
+func (a *App) reloadTextTabFromDisk(tab *editor.Tab) {
+	name := tab.DisplayName()
+	if err := tab.Reload(); err != nil {
+		a.flash(fmt.Sprintf("Could not reload %s: %v", name, err))
+		return
+	}
+	tab.GitLines = loadGitLineChanges(a.rootDir, tab.Path)
+	a.flash(fmt.Sprintf("Reloaded %s from disk", name))
 }
 
 // saveActiveTab writes the active tab's buffer to disk.
