@@ -203,6 +203,8 @@ func builtinMenuGroups() [][]menuItemDef {
 			{label: "Save", shortcut: "Esc s", action: (*App).menuSave, enabled: (*App).hasSavableTab},
 			{label: "Save & close tab", action: (*App).menuSaveAndClose, enabled: (*App).hasSavableTab},
 			{label: "Close tab", shortcut: "Esc w", action: (*App).menuClose, enabled: (*App).hasTab},
+			{label: "Close other tabs", action: (*App).menuCloseOtherTabs, enabled: (*App).hasOtherTabs},
+			{label: "Close all tabs", action: (*App).menuCloseAllTabs, enabled: (*App).hasTab},
 		},
 		// History
 		{
@@ -2548,6 +2550,12 @@ func (a *App) updateMenuHover(x, y int) {
 // hasTab reports whether there is an active tab to act on.
 func (a *App) hasTab() bool { return a.activeTabPtr() != nil }
 
+// hasOtherTabs reports whether closing every tab except the active one would
+// remove at least one tab.
+func (a *App) hasOtherTabs() bool {
+	return a.activeTabPtr() != nil && len(a.tabs) > 1
+}
+
 // hasSavableTab reports whether the active tab is one we can persist —
 // it must exist, have a path on disk, and expose editable text. Used by Save
 // and Save & Close.
@@ -2748,6 +2756,22 @@ func (a *App) menuSaveAndClose() {
 func (a *App) menuClose() {
 	a.closeMenu()
 	a.requestCloseTab(a.activeTab)
+}
+
+// menuCloseOtherTabs closes every tab except the active tab.
+func (a *App) menuCloseOtherTabs() {
+	a.closeMenu()
+	target := a.activeTabPtr()
+	if target == nil {
+		return
+	}
+	a.requestCloseTabs(a.tabsExcept(target))
+}
+
+// menuCloseAllTabs closes every open tab through the shared batch flow.
+func (a *App) menuCloseAllTabs() {
+	a.closeMenu()
+	a.requestCloseTabs(append([]*editor.Tab(nil), a.tabs...))
 }
 
 // menuCopy copies the current selection.

@@ -31,7 +31,16 @@ SpiceEdit is mouse-first. Every UI surface is clickable, draggable, or scrollabl
 
 The active folder — the one shown bold in the sidebar — is the default target for New File. The label in the action menu reflects this: "New file in `cmd/`" when a subfolder is active, plain "New file" at the project root.
 
-Note: macOS Terminal + tmux often swallows Button3. Every right-click action also lives in the main `≡` menu, so you're never stuck.
+Note: macOS Terminal + tmux often swallows Button3. Every core right-click action also lives in the main `≡` menu, so you're never stuck.
+
+Herdr reserves plain right-click for its pane menu. To forward Ctrl+right-click to SpiceEdit, add this to `~/.config/herdr/config.toml` and reload the server:
+
+```toml
+[ui]
+right_click_passthrough_modifier = "ctrl"
+```
+
+Run `herdr config check`, then `herdr server reload-config`. Plain right-click continues to open the Herdr pane menu; Ctrl+right-click now performs the SpiceEdit action listed in the tables below.
 
 ## Tab bar
 
@@ -39,8 +48,10 @@ Note: macOS Terminal + tmux often swallows Button3. Every right-click action als
 | -------------------------------------- | ---------------------------------------------------------------------- |
 | Left-click a tab body                  | Switch to that tab.                                                    |
 | Left-click the `×` on a tab            | Close that tab. Dirty tabs prompt Save / Discard / Cancel.             |
-| Right-click a tab                      | Activate it, then open Close tab / Close other tabs / Close all tabs.  |
+| Right-click a tab                      | Activate it, then open Close tab / Close other tabs / Close all tabs. In Herdr, use Ctrl+right-click after enabling passthrough. |
 | Left-click the `≡` icon                | Open the action menu.                                                  |
+
+The `≡` menu and double-`Esc` expose Close tab, Close other tabs, and Close all tabs even when Button3 is unavailable.
 
 ## Splitter
 

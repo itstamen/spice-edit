@@ -20,6 +20,19 @@ spiceedit ~/code/some-project
 
 That's it. SpiceEdit is now running on the remote box, sharing the SSH channel with the rest of your terminal traffic.
 
+## Right-click through pane managers
+
+SpiceEdit can only react to right-click after every terminal and pane layer forwards Button3. macOS Terminal + tmux commonly drops it; use the `≡` icon or double-tap `Esc` to open the main action menu instead. Close tab, Close other tabs, and Close all tabs are all available there.
+
+Herdr intentionally reserves plain right-click for its pane menu. To forward Ctrl+right-click into SpiceEdit, add this to `~/.config/herdr/config.toml` on the machine running Herdr:
+
+```toml
+[ui]
+right_click_passthrough_modifier = "ctrl"
+```
+
+Run `herdr config check`, then `herdr server reload-config`. Plain right-click still opens Herdr's pane menu; Ctrl+right-click on a SpiceEdit tab opens the tab close menu.
+
 ## Default applications run on the remote host
 
 When you confirm an unsupported-file tree click, or when you press `Esc o`,

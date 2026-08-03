@@ -163,16 +163,25 @@ spiceedit --help       # print short usage
 Then:
 
 - Click a file in the tree to open it.
-- Click a tab to switch, click the `×` to close it. Right-click an actual tab
-  to close that tab, close the other tabs, or close all tabs. Dirty targets use
-  one Save / Discard / Cancel prompt.
-- Click `≡` (top-left), right-click anywhere, or double-tap `Esc`
-  for the action menu — including New file, Rename, Delete.
+- Click a tab to switch, click the `×` to close it. In terminals that forward
+  Button3, right-click an actual tab to close that tab, close the other tabs,
+  or close all tabs. Dirty targets use one Save / Discard / Cancel prompt.
+- Click `≡` (top-left), right-click the editor background in a forwarding
+  terminal, or double-tap `Esc` for the action menu — including all three tab
+  close actions, New file, Rename, and Delete.
 - If your terminal forwards Button3, right-click on a file or folder
   in the tree opens a per-item context menu (New File on folders,
   Rename, Delete). Right-click on an editor tab opens its close actions.
   macOS Terminal + tmux often swallows right-click, so core actions also
   remain available from the main `≡` menu.
+- Herdr keeps plain right-click for its pane menu. To send Ctrl+right-click to
+  SpiceEdit, add the following to `~/.config/herdr/config.toml`, then run
+  `herdr config check` and `herdr server reload-config`:
+
+  ```toml
+  [ui]
+  right_click_passthrough_modifier = "ctrl"
+  ```
 - Drag the splitter between the sidebar and editor to resize.
 - Click and drag in the editor to select; drag past the top or bottom
   edge to auto-scroll the selection.

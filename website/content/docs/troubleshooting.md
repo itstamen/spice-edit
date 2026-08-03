@@ -10,9 +10,20 @@ Common issues, with fixes.
 
 ## Right-click does nothing
 
-You're probably in macOS Terminal + tmux. Apple's default Terminal eats Button3 events before tmux can forward them, so SpiceEdit never sees the right-click.
+You're probably in macOS Terminal + tmux, or an outer pane manager owns the gesture. Apple's default Terminal can eat Button3 before tmux forwards it, so SpiceEdit never sees the right-click.
 
 **Fix.** Use the `≡` icon in the top-left or double-tap `Esc` to open the action menu. Every right-click action also lives there. Long-term: switch to iTerm2, WezTerm, or Ghostty, which all forward Button3 correctly.
+
+### Herdr opens its pane menu instead
+
+That is expected for plain right-click. Herdr can forward Ctrl+right-click to SpiceEdit with this setting in `~/.config/herdr/config.toml`:
+
+```toml
+[ui]
+right_click_passthrough_modifier = "ctrl"
+```
+
+Run `herdr config check`, then `herdr server reload-config`. Plain right-click remains Herdr's pane menu; Ctrl+right-click on a SpiceEdit tab opens Close tab / Close other tabs / Close all tabs. The same three actions remain available from `≡` or double-`Esc` without mouse passthrough.
 
 ## Clipboard isn't working over SSH
 
