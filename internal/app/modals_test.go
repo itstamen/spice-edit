@@ -33,7 +33,6 @@ func TestCloseAllModals_ClearsEverything(t *testing.T) {
 	a.confirmOpen = true
 	a.contextOpen = true
 	a.hoveredMenuRow = 3
-	a.contextNode = a.tree.Root
 	a.contextItems = []contextItem{{label: "x"}}
 	a.promptCallback = func(*App, string) {}
 	a.confirmCallback = func(*App) {}
@@ -48,7 +47,7 @@ func TestCloseAllModals_ClearsEverything(t *testing.T) {
 	if a.hoveredMenuRow != -1 {
 		t.Fatalf("hoveredMenuRow not cleared: %d", a.hoveredMenuRow)
 	}
-	if a.contextNode != nil || a.contextItems != nil {
+	if a.contextItems != nil {
 		t.Fatal("context state not cleared")
 	}
 	if a.promptCallback != nil || a.confirmCallback != nil {
@@ -530,18 +529,15 @@ func TestPlaceContext_FlipsLeftAndUp(t *testing.T) {
 	}
 }
 
-// TestContextActivate runs the highlighted item's action against the node
-// the menu was opened for, and closes all modals first.
+// TestContextActivate runs the highlighted item's closure and closes all
+// modals before the action executes.
 func TestContextActivate(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	called := 0
-	var seenNode *filetree.Node
 	a.contextOpen = true
-	a.contextNode = a.tree.Root
 	a.contextItems = []contextItem{
-		{label: "x", action: func(_ *App, n *filetree.Node) {
+		{label: "x", action: func(_ *App) {
 			called++
-			seenNode = n
 		}},
 	}
 	a.contextHover = 0
@@ -549,11 +545,62 @@ func TestContextActivate(t *testing.T) {
 	if called != 1 {
 		t.Fatalf("expected action to fire once, got %d", called)
 	}
-	if seenNode != a.tree.Root {
-		t.Fatal("action did not receive the contextNode")
-	}
 	if a.contextOpen {
 		t.Fatal("contextActivate should close modals")
+	}
+}
+
+// TestContextActivate_DisabledIsNoop keeps a disabled context row visible
+// and prevents both keyboard and mouse activation from running its action.
+func TestContextActivate_DisabledIsNoop(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	called := false
+	a.contextOpen = true
+	a.contextItems = []contextItem{
+		{
+			label:   "disabled",
+			action:  func(*App) { called = true },
+			enabled: func(*App) bool { return false },
+		},
+	}
+
+	a.contextActivate()
+	if called {
+		t.Fatal("disabled keyboard activation ran the action")
+	}
+	if !a.contextOpen {
+		t.Fatal("disabled activation should keep the context menu open")
+	}
+
+	a.contextX, a.contextY = 5, 5
+	a.handleContextMouse(7, 6, tcell.Button1)
+	if called {
+		t.Fatal("disabled mouse activation ran the action")
+	}
+	if !a.contextOpen {
+		t.Fatal("disabled mouse activation should keep the context menu open")
+	}
+}
+
+// TestDrawContext_DisabledUsesMutedStyle verifies a disabled row never
+// receives hover styling even when it owns the hover index.
+func TestDrawContext_DisabledUsesMutedStyle(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.contextOpen = true
+	a.contextX, a.contextY = 5, 5
+	a.contextHover = 0
+	a.contextItems = []contextItem{
+		{label: "disabled", enabled: func(*App) bool { return false }},
+	}
+
+	a.drawContext()
+	_, _, style, _ := a.screen.GetContent(a.contextX+4, a.contextY+1)
+	fg, bg, _ := style.Decompose()
+	if fg != a.theme.Muted {
+		t.Fatalf("disabled foreground = %v, want %v", fg, a.theme.Muted)
+	}
+	if bg == a.theme.Selection {
+		t.Fatal("disabled row should not use the hover background")
 	}
 }
 
@@ -762,10 +809,9 @@ func TestHandleContextKey(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	called := 0
 	a.contextOpen = true
-	a.contextNode = a.tree.Root
 	a.contextItems = []contextItem{
-		{label: "one", action: func(*App, *filetree.Node) { called++ }},
-		{label: "two", action: func(*App, *filetree.Node) { called += 10 }},
+		{label: "one", action: func(*App) { called++ }},
+		{label: "two", action: func(*App) { called += 10 }},
 	}
 	a.contextHover = 0
 
@@ -804,10 +850,9 @@ func TestHandleContextMouse_HoverAndClick(t *testing.T) {
 	called := 0
 	a.contextOpen = true
 	a.contextX, a.contextY = 5, 5
-	a.contextNode = a.tree.Root
 	a.contextItems = []contextItem{
-		{label: "one", action: func(*App, *filetree.Node) { called++ }},
-		{label: "two", action: func(*App, *filetree.Node) { called += 10 }},
+		{label: "one", action: func(*App) { called++ }},
+		{label: "two", action: func(*App) { called += 10 }},
 	}
 	a.contextHover = 0
 
@@ -820,7 +865,7 @@ func TestHandleContextMouse_HoverAndClick(t *testing.T) {
 	a.contextOpen = true
 	a.contextX, a.contextY = 5, 5
 	a.contextItems = []contextItem{
-		{label: "one", action: func(*App, *filetree.Node) { called++ }},
+		{label: "one", action: func(*App) { called++ }},
 	}
 	a.handleContextMouse(7, 6, tcell.Button1)
 	if called == 0 {

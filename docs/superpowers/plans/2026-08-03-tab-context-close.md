@@ -37,7 +37,7 @@
 - Preserves: `openTreeContext`, `contextActivate`, context keyboard/mouse handling, drawing, and placement.
 - Consumed by: the tab context rows in Task 3.
 
-- [ ] **Step 1: Rewrite context-action tests for closures**
+- [x] **Step 1: Rewrite context-action tests for closures**
 
 Remove `contextNode` setup and assert that a row closure runs once:
 
@@ -64,7 +64,7 @@ func TestContextActivate_RunsClosureAndCloses(t *testing.T) {
 
 Update `TestCloseAllModals_ClearsEverything`, `TestHandleContextKey`, and `TestHandleContextMouse_HoverAndClick` to use `func(*App)` actions and require only `contextItems` cleanup.
 
-- [ ] **Step 2: Add disabled-row regression tests**
+- [x] **Step 2: Add disabled-row regression tests**
 
 Add keyboard and mouse cases proving a disabled row remains open and does not invoke its action:
 
@@ -89,13 +89,13 @@ func TestContextActivate_DisabledIsNoop(t *testing.T) {
 
 Draw a disabled row on the simulation screen and assert its label foreground is `theme.Muted` and its background is not `theme.Selection` even when `contextHover` points to it.
 
-- [ ] **Step 3: Run the focused tests and confirm failure**
+- [x] **Step 3: Run the focused tests and confirm failure**
 
 Run: `go test ./internal/app -run 'Test(Context|HandleContext|OpenTreeContext|CloseAllModals)'`
 
 Expected: FAIL to compile because `contextItem.action` still requires `*filetree.Node`, and disabled rows are not consulted.
 
-- [ ] **Step 4: Replace node-bound rows with closure actions**
+- [x] **Step 4: Replace node-bound rows with closure actions**
 
 Change the row type and add a nil-means-enabled helper:
 
@@ -128,7 +128,7 @@ add := func(label string, action func(*App, *filetree.Node)) {
 
 Use `add` for `New File`, `Rename`, `Delete`, `Copy rel path`, and `Copy abs path` with the same visibility conditions and order as today.
 
-- [ ] **Step 5: Enforce enabled state in activation and drawing**
+- [x] **Step 5: Enforce enabled state in activation and drawing**
 
 Keep disabled rows open and skip their callbacks:
 
@@ -150,13 +150,13 @@ func (a *App) contextActivate() {
 
 In `drawContext`, compute `enabled := item.isEnabled(a)` and `hovered := enabled && i == a.contextHover`. Use the existing normal and hover styles for enabled rows and `a.theme.Muted` for the chevron and label of disabled rows.
 
-- [ ] **Step 6: Run context-menu tests**
+- [x] **Step 6: Run context-menu tests**
 
 Run: `go test ./internal/app -run 'Test(Context|HandleContext|OpenTreeContext|CloseAllModals)'`
 
 Expected: PASS, including all existing tree menu label and activation cases.
 
-- [ ] **Step 7: Commit the generalized context menu**
+- [x] **Step 7: Commit the generalized context menu**
 
 ```bash
 git add internal/app/app.go internal/app/modals.go internal/app/modals_test.go
@@ -181,7 +181,7 @@ git commit -m "Generalize context menu actions"
 - Updates: `requestCloseTab` and `closeTab` to resolve targets by pointer identity.
 - Consumed by: the three tab-context rows in Task 3.
 
-- [ ] **Step 1: Add clean close-set and active-tab tests**
+- [x] **Step 1: Add clean close-set and active-tab tests**
 
 Create a helper that opens named text files and returns their tab pointers. Cover a `Close other tabs`-shaped target set:
 
@@ -199,7 +199,7 @@ func TestRequestCloseTabs_CleanOtherTabsKeepsTarget(t *testing.T) {
 
 Also close tabs before a surviving active tab and assert the same pointer remains selected after indices shift. Close the active tab in a mixed target set and assert the nearest right survivor wins, otherwise the nearest left survivor. Assert `tree.ActiveFile` matches the final active tab and becomes empty when all tabs close.
 
-- [ ] **Step 2: Add one-modal dirty batch tests**
+- [x] **Step 2: Add one-modal dirty batch tests**
 
 Cover all modal actions:
 
@@ -210,7 +210,7 @@ Cover all modal actions:
 
 Drive the modal through `dirtyHover` and `dirtyActivate` so tests exercise the existing callback lifecycle.
 
-- [ ] **Step 3: Add save-failure atomicity coverage**
+- [x] **Step 3: Add save-failure atomicity coverage**
 
 Use one dirty file-backed target followed by a dirty untitled target:
 
@@ -229,13 +229,13 @@ a.dirtyActivate()
 
 Assert both tabs remain open, the file-backed tab was written and is now clean, the untitled tab remains dirty, and status is `Saving untitled tabs is not supported yet`.
 
-- [ ] **Step 4: Run close tests and confirm failure**
+- [x] **Step 4: Run close tests and confirm failure**
 
 Run: `go test ./internal/app -run 'Test(RequestCloseTabs|CloseTabs|RequestCloseTab)'`
 
 Expected: FAIL because batch close helpers do not exist and single-tab callbacks still capture numeric indices.
 
-- [ ] **Step 5: Add pointer identity and target filtering**
+- [x] **Step 5: Add pointer identity and target filtering**
 
 ```go
 // tabIndex returns target's current index, or -1 when it is no longer open.
@@ -277,7 +277,7 @@ func (a *App) openTargetTabs(targets []*editor.Tab) []*editor.Tab {
 }
 ```
 
-- [ ] **Step 6: Add the batch request and targeted save flow**
+- [x] **Step 6: Add the batch request and targeted save flow**
 
 ```go
 func (a *App) requestCloseTabs(targets []*editor.Tab) {
@@ -347,7 +347,7 @@ func (a *App) saveDirtyTabs(targets []*editor.Tab) bool {
 }
 ```
 
-- [ ] **Step 7: Apply each close set in one state transition**
+- [x] **Step 7: Apply each close set in one state transition**
 
 Implement `closeTabs` with this selection policy:
 
@@ -402,13 +402,13 @@ func (a *App) closeTabs(targets []*editor.Tab) {
 
 Update `closeTab(idx)` to call `closeTabs([]*editor.Tab{a.tabs[idx]})`. Update dirty `requestCloseTab` callbacks to capture the target pointer and resolve `tabIndex(target)` immediately before saving; the discard callback closes by pointer.
 
-- [ ] **Step 8: Run close and modal tests**
+- [x] **Step 8: Run close and modal tests**
 
 Run: `go test ./internal/app -run 'Test(RequestCloseTabs|CloseTabs|RequestCloseTab|OpenDirtyClose|HandleDirty)'`
 
 Expected: PASS, including save failure and final active-file synchronization.
 
-- [ ] **Step 9: Commit the close model**
+- [x] **Step 9: Commit the close model**
 
 ```bash
 git add internal/app/app.go internal/app/modals_test.go internal/app/tabclose_test.go
@@ -431,7 +431,7 @@ git commit -m "Add batch tab close handling"
 - Produces: `(*App).openTabContext(target *editor.Tab, x, y int)`.
 - Consumes: `lastTabRects`, `syncActiveTreeFile`, closure-based `contextItem`, `tabIndex`, `tabsExcept`, and `requestCloseTabs`.
 
-- [ ] **Step 1: Add tab-menu and right-click routing tests**
+- [x] **Step 1: Add tab-menu and right-click routing tests**
 
 Create two text fixtures, draw the app to populate `lastTabRects`, and right-click the inactive tab:
 
@@ -457,7 +457,7 @@ func TestHandleMouse_RightClickTabActivatesAndOpensContext(t *testing.T) {
 
 Add cases for the tab `CloseX` cell, `≡` button, tab-bar whitespace, editor body, and a file-tree row. Assert only actual tab hits expose the three tab rows and Button3 never closes a tab immediately.
 
-- [ ] **Step 2: Add enabled-state and callback wiring tests**
+- [x] **Step 2: Add enabled-state and callback wiring tests**
 
 Open one tab and assert `Close other tabs` is disabled while the other rows are enabled. Open a second tab and assert all rows are enabled. Activate each row against clean tabs and verify it delegates to the tested close model: one closes the target, one preserves only the target, and one leaves no tabs.
 
@@ -469,13 +469,13 @@ if contextMenuWidth-5 < textWidth("Close other tabs") {
 }
 ```
 
-- [ ] **Step 3: Run routing tests and confirm failure**
+- [x] **Step 3: Run routing tests and confirm failure**
 
 Run: `go test ./internal/app -run 'Test(HandleMouse_RightClick|OpenTabContext|TabAtPoint|TabContext)'`
 
 Expected: FAIL because every non-tree right-click still opens the main menu and `openTabContext` does not exist.
 
-- [ ] **Step 4: Add tab hit testing and Button3 routing**
+- [x] **Step 4: Add tab hit testing and Button3 routing**
 
 ```go
 // tabAtPoint returns the rendered tab under the screen coordinate.
@@ -506,7 +506,7 @@ func (a *App) tryTabContextClick(x, y int) bool {
 
 In the Button3 branch, keep `tryTreeContextClick` first, then call `tryTabContextClick`, then preserve `openMenu()` as the fallback.
 
-- [ ] **Step 5: Build the three tab context rows**
+- [x] **Step 5: Build the three tab context rows**
 
 Increase `contextMenuWidth` from 19 to 22 so the longest label fits. Add `openTabContext` beside `openTreeContext`:
 
@@ -540,13 +540,13 @@ func (a *App) openTabContext(target *editor.Tab, x, y int) {
 }
 ```
 
-- [ ] **Step 6: Run tab routing and existing mouse tests**
+- [x] **Step 6: Run tab routing and existing mouse tests**
 
 Run: `go test ./internal/app -run 'Test(HandleMouse_RightClick|OpenTabContext|TabAtPoint|TabContext|OpenTreeContext|TabBarClick)'`
 
 Expected: PASS. Editor-body and tab-bar-whitespace Button3 still open the main menu.
 
-- [ ] **Step 7: Run all app tests and commit**
+- [x] **Step 7: Run all app tests and commit**
 
 Run: `go test ./internal/app`
 
@@ -571,7 +571,7 @@ git commit -m "Add tab context close actions"
 - Documents: tab right-click activation, the three close rows, the one-tab disabled rule, and dirty-tab prompting.
 - Verifies: all repository tests plus native, Linux, and Windows builds.
 
-- [ ] **Step 1: Update user-facing tab instructions**
+- [x] **Step 1: Update user-facing tab instructions**
 
 In README, extend the tab instruction to state:
 
@@ -589,7 +589,7 @@ In `website/content/docs/mouse-controls.md`, add this Tab bar row:
 
 Keep the existing Button3/tmux warning and `Esc w` documentation unchanged.
 
-- [ ] **Step 2: Format and inspect the change set**
+- [x] **Step 2: Format and inspect the change set**
 
 Run: `gofmt -w internal/app/app.go internal/app/app_test.go internal/app/modals.go internal/app/modals_test.go internal/app/tabclose_test.go`
 
@@ -597,19 +597,19 @@ Run: `git diff --check`
 
 Expected: no output.
 
-- [ ] **Step 3: Run focused regression tests**
+- [x] **Step 3: Run focused regression tests**
 
 Run: `go test ./internal/app -run 'Test(Context|OpenTreeContext|HandleContext|HandleMouse_RightClick|OpenTabContext|TabAtPoint|TabContext|RequestCloseTabs|CloseTabs|RequestCloseTab)'`
 
 Expected: PASS.
 
-- [ ] **Step 4: Run the full race-enabled suite**
+- [x] **Step 4: Run the full race-enabled suite**
 
 Run: `make test`
 
 Expected: PASS under the race detector.
 
-- [ ] **Step 5: Build native and Linux binaries**
+- [x] **Step 5: Build native and Linux binaries**
 
 Run: `make build`
 
@@ -617,7 +617,7 @@ Run: `make build-linux`
 
 Expected: `bin/spiceedit` and `bin/spiceedit-linux-amd64` build successfully.
 
-- [ ] **Step 6: Cross-test and build Windows**
+- [x] **Step 6: Cross-test and build Windows**
 
 Run: `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o /tmp/spice-edit-app-windows.test.exe ./internal/app`
 
@@ -625,7 +625,7 @@ Run: `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/spiceedit-windows
 
 Expected: both commands succeed.
 
-- [ ] **Step 7: Mark the plan complete and commit documentation**
+- [x] **Step 7: Mark the plan complete and commit documentation**
 
 Mark every plan checkbox complete after all commands pass, then stage only this feature's documentation:
 
@@ -636,7 +636,7 @@ git add README.md website/content/docs/mouse-controls.md \
 git commit -m "Document tab context close controls"
 ```
 
-- [ ] **Step 8: Audit final repository state**
+- [x] **Step 8: Audit final repository state**
 
 Run: `git status --short --branch`
 

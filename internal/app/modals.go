@@ -7,7 +7,7 @@
 
 // modals.go houses the editor's secondary modals: a single-line text prompt
 // (used for Rename and New File), a Yes/No confirmation (used for Delete),
-// and the small right-click context menu that appears over the file tree.
+// and the small right-click context menu used by the file tree and tab bar.
 //
 // Each modal is mutually exclusive with the main action menu and with each
 // other — opening any one calls closeAllModals() first, so we can never end
@@ -20,6 +20,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/cloudmanic/spice-edit/internal/editor"
 	"github.com/cloudmanic/spice-edit/internal/filetree"
 	"github.com/cloudmanic/spice-edit/internal/termtext"
 	"github.com/cloudmanic/spice-edit/internal/theme"
@@ -36,16 +37,21 @@ const (
 
 	// contextMenuWidth is fixed so the popup geometry stays predictable —
 	// the labels are short enough to fit comfortably.
-	contextMenuWidth = 19
+	contextMenuWidth = 22
 )
 
-// contextItem is one row in the tree's right-click context menu. action runs
-// against the node the menu was opened for; enabled gates whether the row is
-// clickable.
+// contextItem is one row in a right-click context menu. Each row captures the
+// object it acts on, while enabled gates whether the row is clickable.
 type contextItem struct {
 	label   string
-	action  func(*App, *filetree.Node)
-	enabled func(*App, *filetree.Node) bool
+	action  func(*App)
+	enabled func(*App) bool
+}
+
+// isEnabled reports whether this context row may run. Rows without an
+// explicit predicate are enabled by default.
+func (item contextItem) isEnabled(a *App) bool {
+	return item.enabled == nil || item.enabled(a)
 }
 
 // closeAllModals dismisses every modal in one shot and parks any in-flight
@@ -67,7 +73,6 @@ func (a *App) closeAllModals() {
 	a.findCursor = 0
 	a.findScroll = 0
 	a.hoveredMenuRow = -1
-	a.contextNode = nil
 	a.contextItems = nil
 	a.promptCallback = nil
 	a.confirmCallback = nil
@@ -826,7 +831,7 @@ func (a *App) drawDirtyClose() {
 }
 
 // -----------------------------------------------------------------------------
-// Tree right-click context menu
+// Right-click context menus
 // -----------------------------------------------------------------------------
 
 // openTreeContext opens a small right-click popup over the file tree, anchored
@@ -836,20 +841,57 @@ func (a *App) openTreeContext(n *filetree.Node, x, y int) {
 	a.closeAllModals()
 
 	items := []contextItem{}
+	add := func(label string, action func(*App, *filetree.Node)) {
+		items = append(items, contextItem{
+			label: label,
+			action: func(app *App) {
+				action(app, n)
+			},
+		})
+	}
 	if n.IsDir {
-		items = append(items, contextItem{label: "New File", action: ctxNewFile})
+		add("New File", ctxNewFile)
 	}
 	if n != a.tree.Root {
-		items = append(items, contextItem{label: "Rename", action: ctxRename})
-		items = append(items, contextItem{label: "Delete", action: ctxDelete})
+		add("Rename", ctxRename)
+		add("Delete", ctxDelete)
 	}
-	items = append(items, contextItem{label: "Copy rel path", action: ctxCopyRelativePath})
-	items = append(items, contextItem{label: "Copy abs path", action: ctxCopyAbsolutePath})
+	add("Copy rel path", ctxCopyRelativePath)
+	add("Copy abs path", ctxCopyAbsolutePath)
 
-	a.contextNode = n
 	a.contextItems = items
 	a.contextHover = 0
 	a.contextX, a.contextY = a.placeContext(x, y, len(items))
+	a.contextOpen = true
+}
+
+// openTabContext opens the three tab-close actions for target. Each callback
+// captures the tab pointer so later index changes cannot redirect the action.
+func (a *App) openTabContext(target *editor.Tab, x, y int) {
+	a.closeAllModals()
+	a.contextItems = []contextItem{
+		{
+			label: "Close tab",
+			action: func(app *App) {
+				if idx := app.tabIndex(target); idx >= 0 {
+					app.requestCloseTab(idx)
+				}
+			},
+			enabled: func(app *App) bool { return app.tabIndex(target) >= 0 },
+		},
+		{
+			label:   "Close other tabs",
+			action:  func(app *App) { app.requestCloseTabs(app.tabsExcept(target)) },
+			enabled: func(app *App) bool { return app.tabIndex(target) >= 0 && len(app.tabs) > 1 },
+		},
+		{
+			label:   "Close all tabs",
+			action:  func(app *App) { app.requestCloseTabs(append([]*editor.Tab(nil), app.tabs...)) },
+			enabled: func(app *App) bool { return app.tabIndex(target) >= 0 && len(app.tabs) > 0 },
+		},
+	}
+	a.contextHover = 0
+	a.contextX, a.contextY = a.placeContext(x, y, len(a.contextItems))
 	a.contextOpen = true
 }
 
@@ -920,17 +962,18 @@ func (a *App) handleContextMouse(x, y int, btn tcell.ButtonMask) {
 	}
 }
 
-// contextActivate runs the currently highlighted context item against the
-// node the menu was opened for.
+// contextActivate runs the currently highlighted context item when enabled.
 func (a *App) contextActivate() {
 	if a.contextHover < 0 || a.contextHover >= len(a.contextItems) {
 		return
 	}
 	item := a.contextItems[a.contextHover]
-	node := a.contextNode
+	if !item.isEnabled(a) {
+		return
+	}
 	a.closeAllModals()
-	if item.action != nil && node != nil {
-		item.action(a, node)
+	if item.action != nil {
+		item.action(a)
 	}
 }
 
@@ -945,22 +988,28 @@ func (a *App) drawContext() {
 	hoverStyle := tcell.StyleDefault.Background(hoverBg).Foreground(a.theme.Text).Bold(true)
 	hoverChevStyle := tcell.StyleDefault.Background(hoverBg).Foreground(a.theme.AccentSoft).Bold(true)
 	chevStyle := tcell.StyleDefault.Background(bg).Foreground(a.theme.AccentSoft)
+	mutedStyle := tcell.StyleDefault.Background(bg).Foreground(a.theme.Muted)
 
 	fillRect(a.screen, mx, my, mw, mh, bgStyle)
 	drawBorder(a.screen, mx, my, mw, mh, borderStyle)
 
 	for i, item := range a.contextItems {
 		cy := my + 1 + i
-		hovered := i == a.contextHover
-		if hovered {
+		enabled := item.isEnabled(a)
+		hovered := enabled && i == a.contextHover
+		switch {
+		case hovered:
 			for cx := mx + 1; cx < mx+mw-1; cx++ {
 				a.screen.SetContent(cx, cy, ' ', nil, hoverStyle)
 			}
 			drawAt(a.screen, mx+2, cy, "▸", hoverChevStyle)
 			drawAtWidth(a.screen, mx+4, cy, mw-5, item.label, hoverStyle)
-		} else {
+		case enabled:
 			drawAt(a.screen, mx+2, cy, "▸", chevStyle)
 			drawAtWidth(a.screen, mx+4, cy, mw-5, item.label, bgStyle)
+		default:
+			drawAt(a.screen, mx+2, cy, "▸", mutedStyle)
+			drawAtWidth(a.screen, mx+4, cy, mw-5, item.label, mutedStyle)
 		}
 	}
 

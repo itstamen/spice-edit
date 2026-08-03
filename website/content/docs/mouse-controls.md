@@ -39,6 +39,7 @@ Note: macOS Terminal + tmux often swallows Button3. Every right-click action als
 | -------------------------------------- | ---------------------------------------------------------------------- |
 | Left-click a tab body                  | Switch to that tab.                                                    |
 | Left-click the `×` on a tab            | Close that tab. Dirty tabs prompt Save / Discard / Cancel.             |
+| Right-click a tab                      | Activate it, then open Close tab / Close other tabs / Close all tabs.  |
 | Left-click the `≡` icon                | Open the action menu.                                                  |
 
 ## Splitter

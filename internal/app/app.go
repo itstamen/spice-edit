@@ -462,11 +462,10 @@ type App struct {
 	formFocus    int               // which prompt row owns the keyboard
 	formCallback func(*App, map[string]string)
 
-	// Right-click context menu over the file tree.
+	// Right-click context menu over the file tree or an editor tab.
 	contextOpen  bool
 	contextX     int
 	contextY     int
-	contextNode  *filetree.Node
 	contextItems []contextItem
 	contextHover int
 
@@ -1513,13 +1512,15 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		return
 	}
 
-	// Right-click handling. Over a file-tree row it opens a small context
-	// menu with file-management actions for that node; everywhere else
-	// it falls through to the main action menu so users have a redundant
-	// mouse-only path to it. Note: macOS Terminal + tmux often swallows
-	// Button3, which is why every action also lives in the main ≡ menu.
+	// Right-click handling. File-tree rows and rendered tabs get focused
+	// context menus; everywhere else falls through to the main action menu.
+	// Note: macOS Terminal + tmux often swallows Button3, which is why core
+	// actions also live in the main ≡ menu.
 	if btn&tcell.Button3 != 0 {
 		if a.tryTreeContextClick(x, y) {
+			return
+		}
+		if a.tryTabContextClick(x, y) {
 			return
 		}
 		a.openMenu()
@@ -1696,6 +1697,35 @@ func (a *App) tryTreeContextClick(x, y int) bool {
 		a.setActiveFolder(filepath.Dir(n.Path))
 	}
 	a.openTreeContext(n, x, y)
+	return true
+}
+
+// tabAtPoint returns the rendered tab under the screen coordinate. The
+// rectangles come from the most recent tab-bar draw so hit testing matches
+// the exact cells visible to the user.
+func (a *App) tabAtPoint(x, y int) (*editor.Tab, bool) {
+	if y != 0 {
+		return nil, false
+	}
+	for _, r := range a.lastTabRects {
+		if x >= r.X && x < r.X+r.Width && r.Index >= 0 && r.Index < len(a.tabs) {
+			return a.tabs[r.Index], true
+		}
+	}
+	return nil, false
+}
+
+// tryTabContextClick activates a hit tab and opens its close-actions menu.
+// Activating first keeps the editor body and file-tree highlight aligned with
+// the tab whose menu the user is about to operate.
+func (a *App) tryTabContextClick(x, y int) bool {
+	tab, ok := a.tabAtPoint(x, y)
+	if !ok {
+		return false
+	}
+	a.activeTab = a.tabIndex(tab)
+	a.syncActiveTreeFile()
+	a.openTabContext(tab, x, y)
 	return true
 }
 
@@ -2198,6 +2228,111 @@ func (a *App) dirtyTabCount() int {
 	return n
 }
 
+// tabIndex returns target's current index, or -1 when it is no longer open.
+func (a *App) tabIndex(target *editor.Tab) int {
+	for i, tab := range a.tabs {
+		if tab == target {
+			return i
+		}
+	}
+	return -1
+}
+
+// tabsExcept snapshots every open tab except target in current tab order.
+func (a *App) tabsExcept(target *editor.Tab) []*editor.Tab {
+	out := make([]*editor.Tab, 0, len(a.tabs))
+	for _, tab := range a.tabs {
+		if tab != target {
+			out = append(out, tab)
+		}
+	}
+	return out
+}
+
+// openTargetTabs deduplicates targets and returns only tabs still open,
+// preserving the current tab order for deterministic saves and fallbacks.
+func (a *App) openTargetTabs(targets []*editor.Tab) []*editor.Tab {
+	wanted := tabPointerSet(targets)
+	out := make([]*editor.Tab, 0, len(wanted))
+	for _, tab := range a.tabs {
+		if _, ok := wanted[tab]; ok {
+			out = append(out, tab)
+		}
+	}
+	return out
+}
+
+// tabPointerSet builds an identity set for target membership checks.
+func tabPointerSet(tabs []*editor.Tab) map[*editor.Tab]struct{} {
+	out := make(map[*editor.Tab]struct{}, len(tabs))
+	for _, tab := range tabs {
+		if tab != nil {
+			out[tab] = struct{}{}
+		}
+	}
+	return out
+}
+
+// dirtyTabs returns dirty tabs from tabs in the supplied order.
+func dirtyTabs(tabs []*editor.Tab) []*editor.Tab {
+	out := make([]*editor.Tab, 0, len(tabs))
+	for _, tab := range tabs {
+		if tab.Dirty {
+			out = append(out, tab)
+		}
+	}
+	return out
+}
+
+// saveDirtyTabs saves dirty targets in their current tab order. A failure
+// stops later saves so the caller can keep the complete close set visible.
+func (a *App) saveDirtyTabs(targets []*editor.Tab) bool {
+	targeted := tabPointerSet(targets)
+	for i, tab := range a.tabs {
+		if _, ok := targeted[tab]; !ok || !tab.Dirty {
+			continue
+		}
+		if !a.saveTabAt(i) {
+			return false
+		}
+	}
+	return true
+}
+
+// requestCloseTabs closes a captured target set. Dirty targets share one
+// Save / Discard / Cancel prompt, and Save closes nothing unless all required
+// writes succeed.
+func (a *App) requestCloseTabs(targets []*editor.Tab) {
+	targets = a.openTargetTabs(targets)
+	if len(targets) == 0 {
+		return
+	}
+	if len(targets) == 1 {
+		a.requestCloseTab(a.tabIndex(targets[0]))
+		return
+	}
+
+	dirty := dirtyTabs(targets)
+	if len(dirty) == 0 {
+		a.closeTabs(targets)
+		return
+	}
+	message := fmt.Sprintf("%d files have unsaved changes.", len(dirty))
+	if len(dirty) == 1 {
+		message = dirty[0].DisplayName() + " has unsaved changes."
+	}
+	a.openDirtyClose(
+		"Unsaved changes",
+		message,
+		func(app *App) {
+			if app.saveDirtyTabs(targets) {
+				app.closeTabs(targets)
+			}
+		},
+		func(app *App) { app.closeTabs(targets) },
+	)
+}
+
 // requestCloseTab closes the tab at idx. A clean tab closes immediately;
 // a dirty tab opens the unsaved-changes modal so the user can pick
 // Save / Discard / Cancel. The Save path saves the buffer first and only
@@ -2207,26 +2342,23 @@ func (a *App) requestCloseTab(idx int) {
 	if idx < 0 || idx >= len(a.tabs) {
 		return
 	}
-	tab := a.tabs[idx]
-	if !tab.Dirty {
-		a.closeTab(idx)
+	target := a.tabs[idx]
+	if !target.Dirty {
+		a.closeTabs([]*editor.Tab{target})
 		return
-	}
-	name := filepath.Base(tab.Path)
-	if name == "" || name == "." {
-		name = "untitled"
 	}
 	a.openDirtyClose(
 		"Unsaved changes",
-		name+" has unsaved changes.",
+		target.DisplayName()+" has unsaved changes.",
 		func(app *App) {
 			// Save → close. saveTabAt flashes its own error, in which
 			// case we keep the tab around so the user can react.
-			if app.saveTabAt(idx) {
-				app.closeTab(idx)
+			idx := app.tabIndex(target)
+			if idx >= 0 && app.saveTabAt(idx) {
+				app.closeTabs([]*editor.Tab{target})
 			}
 		},
-		func(app *App) { app.closeTab(idx) },
+		func(app *App) { app.closeTabs([]*editor.Tab{target}) },
 	)
 }
 
@@ -2235,11 +2367,54 @@ func (a *App) closeTab(idx int) {
 	if idx < 0 || idx >= len(a.tabs) {
 		return
 	}
-	a.tabs = append(a.tabs[:idx], a.tabs[idx+1:]...)
-	if a.activeTab >= len(a.tabs) {
-		a.activeTab = len(a.tabs) - 1
+	a.closeTabs([]*editor.Tab{a.tabs[idx]})
+}
+
+// closeTabs removes a target set in one state transition. A surviving active
+// tab stays active by identity; otherwise the nearest right survivor wins,
+// falling back to the nearest left survivor.
+func (a *App) closeTabs(targets []*editor.Tab) {
+	targets = a.openTargetTabs(targets)
+	if len(targets) == 0 {
+		return
 	}
-	if a.activeTab < 0 {
+	closing := tabPointerSet(targets)
+	active := a.activeTabPtr()
+	oldActive := a.activeTab
+
+	var fallback *editor.Tab
+	if _, activeCloses := closing[active]; activeCloses {
+		for i := oldActive + 1; i < len(a.tabs); i++ {
+			if _, closes := closing[a.tabs[i]]; !closes {
+				fallback = a.tabs[i]
+				break
+			}
+		}
+		if fallback == nil {
+			for i := oldActive - 1; i >= 0; i-- {
+				if _, closes := closing[a.tabs[i]]; !closes {
+					fallback = a.tabs[i]
+					break
+				}
+			}
+		}
+	}
+
+	survivors := make([]*editor.Tab, 0, len(a.tabs)-len(targets))
+	for _, tab := range a.tabs {
+		if _, closes := closing[tab]; !closes {
+			survivors = append(survivors, tab)
+		}
+	}
+	a.tabs = survivors
+	switch {
+	case len(a.tabs) == 0:
+		a.activeTab = 0
+	case active != nil && a.tabIndex(active) >= 0:
+		a.activeTab = a.tabIndex(active)
+	case fallback != nil:
+		a.activeTab = a.tabIndex(fallback)
+	default:
 		a.activeTab = 0
 	}
 	a.syncActiveTreeFile()
