@@ -3,7 +3,7 @@
 ## Document information
 
 - **Date:** 2026-08-03
-- **Status:** Proposed
+- **Status:** Approved
 - **Related design:** `docs/superpowers/specs/2026-08-03-tab-context-close-design.md`
 - **Selected approach:** Configure Ctrl+right-click passthrough in Herdr and expose batch tab-close actions in SpiceEdit's main menu.
 
