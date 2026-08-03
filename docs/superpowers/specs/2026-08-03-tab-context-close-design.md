@@ -3,7 +3,7 @@
 ## Document information
 
 - **Date:** 2026-08-03
-- **Status:** Proposed
+- **Status:** Approved
 - **Related code:** `internal/app/app.go`, `internal/app/modals.go`
 - **Selected approach:** Reuse the existing context-menu and unsaved-changes modal infrastructure, with menu actions captured as closures.
 
