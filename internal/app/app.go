@@ -344,6 +344,7 @@ type App struct {
 	// universal half-block fallback.
 	graphics             termgraphics.Presenter
 	showFrame            func()
+	eventNow             func() time.Time
 	graphicsDisabled     bool
 	graphicsFallback     map[imageViewKey]struct{}
 	graphicsHinted       bool
@@ -757,21 +758,96 @@ func (a *App) Close() {
 	}
 }
 
-// Run is the editor's main event loop. It blocks on PollEvent, dispatches
-// each event, redraws, and exits when a.quit is set.
+const (
+	maxEventBurst         = 64
+	maxEventBurstDuration = 8 * time.Millisecond
+)
+
+type pendingEventSource interface {
+	PollEvent() tcell.Event
+	HasPendingEvent() bool
+}
+
+// eventTime returns the wall clock used to bound one input burst. Tests can
+// freeze it so the event-count limit remains deterministic.
+func (a *App) eventTime() time.Time {
+	if a.eventNow != nil {
+		return a.eventNow()
+	}
+	return time.Now()
+}
+
+// Run is the editor's main event loop. Compatible queued input is applied in
+// bounded bursts so rapid navigation does not render every intermediate state.
 func (a *App) Run() error {
 	a.width, a.height = a.screen.Size()
 	a.flushFrame()
 
+	var deferred tcell.Event
 	for !a.quit {
-		ev := a.screen.PollEvent()
+		ev := deferred
+		deferred = nil
+		if ev == nil {
+			ev = a.screen.PollEvent()
+		}
 		if ev == nil {
 			break
 		}
-		a.handleEvent(ev)
+		deadline := a.eventTime().Add(maxEventBurstDuration)
+		deferred, _ = a.processEventBurst(ev, a.screen, deadline)
 		a.flushFrame()
 	}
 	return nil
+}
+
+// eventCanShareFrame reports whether an event may skip its intermediate frame
+// when adjacent compatible events are already waiting. State-changing command
+// boundaries remain one-event frames so prompts and tab changes are visible.
+func (a *App) eventCanShareFrame(ev tcell.Event) bool {
+	if ev == nil || a.anyModalOpen() || !a.lastEscape.IsZero() {
+		return false
+	}
+	switch e := ev.(type) {
+	case *tcell.EventKey:
+		switch e.Key() {
+		case tcell.KeyPgUp, tcell.KeyPgDn,
+			tcell.KeyUp, tcell.KeyDown, tcell.KeyLeft, tcell.KeyRight,
+			tcell.KeyHome, tcell.KeyEnd,
+			tcell.KeyEnter, tcell.KeyTab,
+			tcell.KeyBackspace, tcell.KeyBackspace2, tcell.KeyDelete:
+			return true
+		case tcell.KeyRune:
+			return e.Modifiers()&(tcell.ModCtrl|tcell.ModAlt|tcell.ModMeta) == 0
+		}
+	case *tcell.EventMouse:
+		buttons := e.Buttons()
+		wheels := tcell.WheelUp | tcell.WheelDown | tcell.WheelLeft | tcell.WheelRight
+		return buttons&wheels != 0 || (buttons == tcell.ButtonNone && a.dragMode == "")
+	}
+	return false
+}
+
+// processEventBurst applies first and then consumes compatible queued events
+// until the count or time budget is exhausted. A consumed boundary event is
+// returned untouched so Run can present the current frame before handling it.
+func (a *App) processEventBurst(first tcell.Event, source pendingEventSource, deadline time.Time) (tcell.Event, int) {
+	a.handleEvent(first)
+	handled := 1
+	if !a.eventCanShareFrame(first) {
+		return nil, handled
+	}
+	for !a.quit && handled < maxEventBurst && a.eventTime().Before(deadline) && source.HasPendingEvent() {
+		next := source.PollEvent()
+		if next == nil {
+			break
+		}
+		if !a.eventCanShareFrame(next) {
+			return next, handled
+		}
+		a.handleEvent(next)
+		handled++
+	}
+	return nil, handled
 }
 
 // initializeImageGraphics selects the one supported graphics presenter for
