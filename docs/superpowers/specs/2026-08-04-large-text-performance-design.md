@@ -3,7 +3,7 @@
 ## Document information
 
 - **Date:** 2026-08-04
-- **Status:** Proposed
+- **Status:** Approved
 - **Selected approach:** Bounded event batching with syntax-highlight and soft-wrap caches.
 - **Example file:** `/Users/itstamen/workspace/doc_factory/2608珊瑚海/slide_jobs.json`
 
