@@ -34,7 +34,7 @@
 - Adds: `eventNow func() time.Time` test seam on `App`.
 - Consumes: existing `handleEvent`, `flushFrame`, `anyModalOpen`, `lastEscape`, and `dragMode` state.
 
-- [ ] **Step 1: Write failing burst-limit and boundary tests**
+- [x] **Step 1: Write failing burst-limit and boundary tests**
 
 Create `internal/app/eventburst_test.go` with the repository header, a queued screen, and these helpers:
 
@@ -152,7 +152,7 @@ func TestProcessEventBurstStopsAtDeadline(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Write the failing Run frame-count test**
+- [x] **Step 2: Write the failing Run frame-count test**
 
 Add:
 
@@ -266,7 +266,7 @@ func TestProcessEventBurstPreservesEditingAndSelection(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Run tests and confirm failure**
+- [x] **Step 3: Run tests and confirm failure**
 
 Run:
 
@@ -276,7 +276,7 @@ go test ./internal/app -run 'Test(ProcessEventBurst|RunBatchesNavigationFrames|E
 
 Expected: FAIL because the burst interfaces do not exist.
 
-- [ ] **Step 4: Implement bounded event bursts**
+- [x] **Step 4: Implement bounded event bursts**
 
 Add near `Run`:
 
@@ -378,7 +378,7 @@ func (a *App) Run() error {
 }
 ```
 
-- [ ] **Step 5: Run focused and full app tests**
+- [x] **Step 5: Run focused and full app tests**
 
 Run:
 
@@ -390,7 +390,7 @@ go test ./internal/app
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/app/app.go internal/app/eventburst_test.go
@@ -415,7 +415,7 @@ git commit -m "Batch rapid editor events"
 - Produces: `(*Tab).markTextChanged()` and `(*Tab).invalidateWrapLayout()`.
 - Adds: `textRevision uint64` and `wrapCache wrapLayout` to `Tab`.
 
-- [ ] **Step 1: Write failing cache and index tests**
+- [x] **Step 1: Write failing cache and index tests**
 
 Create `internal/editor/wrap_test.go`:
 
@@ -541,7 +541,7 @@ func TestReloadInvalidatesWrap(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests and confirm failure**
+- [x] **Step 2: Run tests and confirm failure**
 
 ```bash
 go test ./internal/editor -run 'Test(WrapLayout|VisualRowForPosition|TextMutationInvalidatesWrap)'
@@ -549,7 +549,7 @@ go test ./internal/editor -run 'Test(WrapLayout|VisualRowForPosition|TextMutatio
 
 Expected: FAIL because the cache, revision, and line index do not exist.
 
-- [ ] **Step 3: Implement the layout cache**
+- [x] **Step 3: Implement the layout cache**
 
 In `internal/editor/wrap.go` add:
 
@@ -679,7 +679,7 @@ func (t *Tab) clampWrapScroll(contentW, viewH int) []wrapRow {
 }
 ```
 
-- [ ] **Step 4: Add shared content invalidation**
+- [x] **Step 4: Add shared content invalidation**
 
 Add to `Tab`:
 
@@ -704,7 +704,7 @@ func (t *Tab) markTextChanged() {
 
 Replace every successful text mutation's direct `StyleStale = true` with `markTextChanged()`. Call it after Reload buffer replacement, line-comment edits, and `applySnapshot`. No-op mutation paths must leave revision unchanged.
 
-- [ ] **Step 5: Run regressions**
+- [x] **Step 5: Run regressions**
 
 ```bash
 gofmt -w internal/editor/tab.go internal/editor/wrap.go internal/editor/wrap_test.go internal/editor/comment.go internal/editor/undo.go
@@ -714,7 +714,7 @@ go test ./internal/editor
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/editor/tab.go internal/editor/wrap.go internal/editor/wrap_test.go internal/editor/comment.go internal/editor/undo.go internal/editor/tab_test.go
@@ -739,7 +739,7 @@ git commit -m "Cache soft-wrap layouts"
 - Produces: `(*Tab).highlightStylesForLine(int) []tcell.Style`.
 - Produces: `(*Tab).SetPath(string)`.
 
-- [ ] **Step 1: Write failing relative-window tests**
+- [x] **Step 1: Write failing relative-window tests**
 
 Add to `internal/editor/highlight_test.go`:
 
@@ -879,7 +879,7 @@ if !a.tabs[0].StyleStale {
 
 Replace its existing `a.doRenameFolder(oldDir, "renamed")` line rather than calling the rename twice.
 
-- [ ] **Step 2: Run tests and confirm failure**
+- [x] **Step 2: Run tests and confirm failure**
 
 ```bash
 go test ./internal/editor ./internal/app -run 'Test(HighlightVisibleWindow|Tab_RenderReuse|Tab_RenderRebuild|Rename.*Style)'
@@ -887,7 +887,7 @@ go test ./internal/editor ./internal/app -run 'Test(HighlightVisibleWindow|Tab_R
 
 Expected: FAIL because the relative window and path setter do not exist.
 
-- [ ] **Step 3: Implement the relative highlighter**
+- [x] **Step 3: Implement the relative highlighter**
 
 In `internal/editor/highlight.go` add:
 
@@ -940,7 +940,7 @@ func HighlightVisible(filename string, lines []string, startLine, height int, t 
 
 `Tab.RenderSoftWrap` must use `highlightVisibleWindow` through `ensureHighlightWindow`, not this absolute compatibility wrapper.
 
-- [ ] **Step 4: Implement the prefetched Tab cache**
+- [x] **Step 4: Implement the prefetched Tab cache**
 
 Add:
 
@@ -1011,7 +1011,7 @@ func (t *Tab) SetPath(path string) {
 
 Call `ensureHighlightWindow` from `RenderSoftWrap` and replace absolute `Styles[lineIdx]` lookups with `highlightStylesForLine(lineIdx)`. Update both rename flows in `internal/app/fileops.go` to call `SetPath`.
 
-- [ ] **Step 5: Run regressions**
+- [x] **Step 5: Run regressions**
 
 ```bash
 gofmt -w internal/editor/highlight.go internal/editor/highlight_test.go internal/editor/tab.go internal/editor/tab_test.go internal/app/fileops.go internal/app/fileops_test.go
@@ -1022,7 +1022,7 @@ go test ./internal/editor ./internal/app
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/editor/highlight.go internal/editor/highlight_test.go internal/editor/tab.go internal/editor/tab_test.go internal/app/fileops.go internal/app/fileops_test.go
@@ -1043,7 +1043,7 @@ git commit -m "Cache syntax highlight windows"
 - Produces: `BenchmarkMoveCursorSoftWrapCached`.
 - Produces: `BenchmarkHighlightVisibleWindowLargeFile`.
 
-- [ ] **Step 1: Add benchmark fixtures**
+- [x] **Step 1: Add benchmark fixtures**
 
 Create `internal/editor/performance_test.go` with the repository header:
 
@@ -1083,7 +1083,7 @@ func benchmarkScreen(b *testing.B, width, height int) tcell.SimulationScreen {
 }
 ```
 
-- [ ] **Step 2: Add cached and cache-miss benchmarks**
+- [x] **Step 2: Add cached and cache-miss benchmarks**
 
 Add:
 
@@ -1149,7 +1149,7 @@ func BenchmarkRenderLargeJSONCacheMiss(b *testing.B) {
 }
 ```
 
-- [ ] **Step 3: Run benchmarks and record evidence**
+- [x] **Step 3: Run benchmarks and record evidence**
 
 ```bash
 gofmt -w internal/editor/performance_test.go
@@ -1158,7 +1158,16 @@ go test -run '^$' -bench 'Benchmark(RenderLargeJSON|MoveCursorSoftWrap|Highlight
 
 Expected: all benchmarks complete. Record `ns/op`, `B/op`, and `allocs/op` under this step. Cached render and cached wrap movement must allocate substantially less than cache-miss paths.
 
-- [ ] **Step 4: Run focused regressions**
+Apple M3, darwin/arm64 evidence from August 4, 2026:
+
+```text
+BenchmarkRenderLargeJSONCached-8              595817 ns/op     752540 B/op    10925 allocs/op
+BenchmarkRenderLargeJSONCacheMiss-8         15391298 ns/op   20332855 B/op   260688 allocs/op
+BenchmarkMoveCursorSoftWrapCached-8               53.50 ns/op       76 B/op        2 allocs/op
+BenchmarkHighlightVisibleWindowLargeFile-8  19760878 ns/op   26854612 B/op   329992 allocs/op
+```
+
+- [x] **Step 4: Run focused regressions**
 
 ```bash
 go test ./internal/app -run 'Test(ProcessEventBurst|RunBatchesNavigationFrames|EventCanShareFrame)'
@@ -1167,7 +1176,7 @@ go test ./internal/editor -run 'Test(HighlightVisibleWindow|WrapLayout|VisualRow
 
 Expected: PASS.
 
-- [ ] **Step 5: Run full tests and builds**
+- [x] **Step 5: Run full tests and builds**
 
 ```bash
 git diff --check
@@ -1180,7 +1189,9 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/spiceedit-windows-amd64
 
 Expected: no diff errors; race-enabled tests and all builds pass.
 
-- [ ] **Step 6: Verify the supplied JSON manually**
+Completed on August 4, 2026: `make test`, `make build`, `make build-linux`, the Windows app test compile, and the Windows binary build all passed.
+
+- [x] **Step 6: Verify the supplied JSON manually**
 
 Run:
 
@@ -1190,14 +1201,16 @@ Run:
 
 Rapidly exercise PageUp/PageDown, arrows, wheel scrolling, shifted selection, insertion, Backspace, and Delete with soft wrap off and on. Confirm the editor remains responsive and does not replay every intermediate page. Use a disposable copy for destructive editing tests.
 
-- [ ] **Step 7: Commit benchmark evidence**
+Verified on August 4, 2026 with disposable copies of the supplied 20,210-byte, 557-line JSON. Rapid PageDown and arrow bursts completed with soft wrap disabled and enabled. Separate continuous 400-rune insert, 400-backspace, and 200-delete bursts remained responsive in both modes. Automated burst tests cover wheel scrolling and shifted selection state preservation.
+
+- [x] **Step 7: Commit benchmark evidence**
 
 ```bash
 git add internal/editor/performance_test.go docs/superpowers/plans/2026-08-04-large-text-performance.md
 git commit -m "Benchmark large text editing"
 ```
 
-- [ ] **Step 8: Audit final state**
+- [x] **Step 8: Audit final state**
 
 ```bash
 git status --short --branch
