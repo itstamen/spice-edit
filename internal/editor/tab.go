@@ -28,6 +28,9 @@ import (
 // never overlaps the first digit.
 const defaultGutterWidth = 6
 
+// highlightPrefetchLines keeps nearby scrolls inside one syntax cache window.
+const highlightPrefetchLines = 256
+
 // gutterWidthFor returns the line-number column width for a buffer of
 // lineCount lines. It keeps defaultGutterWidth for files that fit and grows
 // by one cell per extra digit so the git change-bar always has a blank
@@ -75,14 +78,12 @@ type Tab struct {
 	textRevision uint64
 	wrapCache    wrapLayout
 
-	// lastHighlightScrollY / lastHighlightHeight record the viewport Render
-	// last tokenised for. Without them, every redraw (mouse moves included)
-	// would re-tokenise the visible rows even when nothing changed. Render
-	// recomputes only when the content changed (StyleStale) or the viewport
-	// shifted (scroll / height), since the grid is indexed by absolute line
-	// number and only carries the visible rows.
-	lastHighlightScrollY int
-	lastHighlightHeight  int
+	// The relative syntax window covers [highlightStart, highlightEnd). Nearby
+	// scrolls reuse it until content, path, theme, or window coverage changes.
+	highlightStart    int
+	highlightEnd      int
+	highlightTheme    theme.Theme
+	hasHighlightTheme bool
 
 	// Mtime is the file's modification time as of the last successful
 	// read or write. The app's periodic disk-reconcile loop compares it
@@ -241,6 +242,15 @@ func (t *Tab) DisplayName() string {
 	return filepath.Base(t.Path)
 }
 
+// SetPath updates the lexer-sensitive filename and invalidates highlighting.
+func (t *Tab) SetPath(path string) {
+	if t.Path == path {
+		return
+	}
+	t.Path = path
+	t.StyleStale = true
+}
+
 // invalidateWrapLayout drops the width-sensitive visual-row index.
 func (t *Tab) invalidateWrapLayout() {
 	t.wrapCache = wrapLayout{}
@@ -251,6 +261,61 @@ func (t *Tab) markTextChanged() {
 	t.textRevision++
 	t.invalidateWrapLayout()
 	t.StyleStale = true
+}
+
+// ensureHighlightWindow keeps a prefetched relative style window around the
+// visible logical lines, rebuilding only when the cached inputs no longer fit.
+func (t *Tab) ensureHighlightWindow(start, height int, th theme.Theme) {
+	if height <= 0 || t.Buffer == nil {
+		t.Styles = nil
+		return
+	}
+	if start < 0 {
+		start = 0
+	}
+	lineCount := t.Buffer.LineCount()
+	if start >= lineCount {
+		t.Styles = nil
+		t.highlightStart = 0
+		t.highlightEnd = 0
+		return
+	}
+	end := start + height
+	if end > lineCount {
+		end = lineCount
+	}
+	if !t.StyleStale && t.hasHighlightTheme && t.highlightTheme == th &&
+		start >= t.highlightStart && end <= t.highlightEnd {
+		return
+	}
+
+	cacheStart := start - highlightPrefetchLines
+	if cacheStart < 0 {
+		cacheStart = 0
+	}
+	cacheEnd := end + highlightPrefetchLines
+	if cacheEnd > lineCount {
+		cacheEnd = lineCount
+	}
+	windowStart, rows := highlightVisibleWindow(
+		t.Path, t.Buffer.Lines, cacheStart, cacheEnd-cacheStart, th,
+	)
+	t.Styles = rows
+	t.highlightStart = windowStart
+	t.highlightEnd = windowStart + len(rows)
+	t.highlightTheme = th
+	t.hasHighlightTheme = true
+	t.StyleStale = false
+}
+
+// highlightStylesForLine maps an absolute logical line into the relative
+// syntax window.
+func (t *Tab) highlightStylesForLine(line int) []tcell.Style {
+	idx := line - t.highlightStart
+	if idx < 0 || idx >= len(t.Styles) {
+		return nil
+	}
+	return t.Styles[idx]
 }
 
 // Save writes the buffer to disk and clears Dirty. It is an error to call
@@ -658,17 +723,7 @@ func (t *Tab) RenderSoftWrap(scr tcell.Screen, th theme.Theme, x, y, w, h int, s
 	} else {
 		t.clampScroll(h)
 	}
-	// Re-tokenise only when the content changed (StyleStale) or the viewport
-	// shifted (scroll / height). Otherwise every redraw, including mouse
-	// moves, would re-tokenise the visible rows for nothing. The grid is
-	// indexed by absolute line number and only carries the visible rows, so
-	// a scroll change means different rows must be filled.
-	if t.StyleStale || highlightStart != t.lastHighlightScrollY || highlightHeight != t.lastHighlightHeight {
-		t.Styles = HighlightVisible(t.Path, t.Buffer.Lines, highlightStart, highlightHeight, th)
-		t.StyleStale = false
-		t.lastHighlightScrollY = highlightStart
-		t.lastHighlightHeight = highlightHeight
-	}
+	t.ensureHighlightWindow(highlightStart, highlightHeight, th)
 
 	bg := th.BG
 	bgStyle := tcell.StyleDefault.Background(bg).Foreground(th.Text)
@@ -742,10 +797,7 @@ func (t *Tab) RenderSoftWrap(scr tcell.Screen, th theme.Theme, x, y, w, h int, s
 				// Line content, with syntax styles, selection bg, and line bg. We
 				// walk graphemes from the start of the line so tab stops anchor to
 				// column 0 and every wide glyph owns all of its terminal cells.
-				var styles []tcell.Style
-				if lineIdx < len(t.Styles) {
-					styles = t.Styles[lineIdx]
-				}
+				styles := t.highlightStylesForLine(lineIdx)
 				lineScrollX := 0
 				if !softWrap {
 					lineScrollX = normalizedRuneCol(runes, t.ScrollX)
@@ -834,10 +886,7 @@ func (t *Tab) RenderSoftWrap(scr tcell.Screen, th theme.Theme, x, y, w, h int, s
 				}
 			}
 
-			var styles []tcell.Style
-			if lineIdx < len(t.Styles) {
-				styles = t.Styles[lineIdx]
-			}
+			styles := t.highlightStylesForLine(lineIdx)
 			visualCol := 0
 			for _, cluster := range lineClusters(runes) {
 				width := clusterVisualWidth(cluster, visualCol)

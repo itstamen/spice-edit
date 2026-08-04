@@ -234,8 +234,12 @@ func TestDoRenameFolder_RewritesDescendantTabPaths(t *testing.T) {
 	a := newTestApp(t, root)
 	a.openFile(leaf)
 	a.setActiveFolder(oldDir)
+	a.tabs[0].StyleStale = false
 
 	a.doRenameFolder(oldDir, "renamed")
+	if !a.tabs[0].StyleStale {
+		t.Fatal("folder rename did not invalidate lexer-sensitive path cache")
+	}
 
 	newLeaf := filepath.Join(root, "renamed", "deep", "leaf.go")
 	if _, err := os.Stat(newLeaf); err != nil {
@@ -246,6 +250,26 @@ func TestDoRenameFolder_RewritesDescendantTabPaths(t *testing.T) {
 	}
 	if want := filepath.Join(root, "renamed"); a.activeFolder != want {
 		t.Fatalf("activeFolder: got %q, want %q", a.activeFolder, want)
+	}
+}
+
+func TestDoRenameFileInvalidatesHighlightPath(t *testing.T) {
+	root := t.TempDir()
+	oldPath := filepath.Join(root, "data.txt")
+	if err := os.WriteFile(oldPath, []byte(`{"value": 1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, root)
+	a.openFile(oldPath)
+	a.tabs[0].StyleStale = false
+
+	a.doRenameFile(oldPath, "data.json")
+
+	if got := a.tabs[0].Path; got != filepath.Join(root, "data.json") {
+		t.Fatalf("tab path=%q", got)
+	}
+	if !a.tabs[0].StyleStale {
+		t.Fatal("lexer-sensitive rename did not invalidate highlight cache")
 	}
 }
 

@@ -14,6 +14,7 @@
 package editor
 
 import (
+	"fmt"
 	"image"
 	"os"
 	"path/filepath"
@@ -1332,67 +1333,78 @@ func TestGutterWidthFor(t *testing.T) {
 	}
 }
 
-// TestTab_RenderSkipsHighlightWhenNotStale confirms Render only re-tokenises
-// the visible rows when something actually changed. Without this gate every
-// redraw, including mouse moves, would re-tokenise for nothing, and the
-// StyleStale flag set by every edit would be written but never read. We
-// detect recompute by comparing the styles grid's backing array: a fresh
-// make per recompute vs. reuse on skip.
-func TestTab_RenderSkipsHighlightWhenNotStale(t *testing.T) {
-	scr := newSimScreen(t, 40, 10)
-	defer scr.Fini()
-
-	tab, _ := NewTab("")
-	tab.Buffer = NewBuffer("package main\nfunc main() {}\n")
-	tab.StyleStale = true
-
-	tab.Render(scr, theme.Default(), 0, 0, 40, 10)
-	if tab.Styles == nil {
-		t.Fatal("expected first render to highlight")
+func highlightCacheTestTab(lineCount int) *Tab {
+	lines := make([]string, lineCount)
+	for i := range lines {
+		lines[i] = fmt.Sprintf(`{"line": %d, "value": "text"}`, i)
 	}
-	firstPtr := reflect.ValueOf(tab.Styles).Pointer()
+	return &Tab{Path: "large.json", Buffer: &Buffer{Lines: lines}, StyleStale: true}
+}
 
-	// Second render with no content, scroll, or height change: should reuse
-	// the existing styles grid instead of re-tokenising.
-	tab.Render(scr, theme.Default(), 0, 0, 40, 10)
-	if reflect.ValueOf(tab.Styles).Pointer() != firstPtr {
-		t.Fatal("expected Render to skip re-highlight when nothing changed")
+func highlightCacheScreen(t *testing.T) tcell.SimulationScreen {
+	t.Helper()
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatal(err)
 	}
+	scr.SetSize(80, 20)
+	t.Cleanup(scr.Fini)
+	return scr
+}
 
-	// An edit marks styles stale, so the next render must recompute.
-	tab.StyleStale = true
-	tab.Render(scr, theme.Default(), 0, 0, 40, 10)
-	if reflect.ValueOf(tab.Styles).Pointer() == firstPtr {
-		t.Fatal("expected Render to re-highlight after StyleStale set")
+func TestTab_RenderReusesHighlightInsidePrefetchWindow(t *testing.T) {
+	tab := highlightCacheTestTab(700)
+	scr := highlightCacheScreen(t)
+	tab.Render(scr, theme.Default(), 0, 0, 80, 20)
+	first := reflect.ValueOf(tab.Styles).Pointer()
+
+	tab.ScrollY = 40
+	tab.cursorMoved = false
+	tab.Render(scr, theme.Default(), 0, 0, 80, 20)
+	if got := reflect.ValueOf(tab.Styles).Pointer(); got != first {
+		t.Fatal("scroll inside prefetch window rebuilt styles")
 	}
 }
 
-// TestTab_RenderRecomputesHighlightOnScroll confirms Render re-tokenises
-// when the viewport scrolls. The highlight grid is indexed by absolute line
-// number and only carries the visible rows, so a scroll change means
-// different rows must be filled even when the content is unchanged.
-func TestTab_RenderRecomputesHighlightOnScroll(t *testing.T) {
-	scr := newSimScreen(t, 40, 10)
-	defer scr.Fini()
+func TestTab_RenderRebuildsHighlightOutsidePrefetchWindow(t *testing.T) {
+	tab := highlightCacheTestTab(700)
+	scr := highlightCacheScreen(t)
+	tab.Render(scr, theme.Default(), 0, 0, 80, 20)
+	firstRows := tab.Styles
+	firstPtr := &firstRows[0]
 
-	tab, _ := NewTab("")
-	tab.Buffer = NewBuffer(strings.Repeat("package main\n", 50))
-	tab.StyleStale = true
-
-	tab.Render(scr, theme.Default(), 0, 0, 40, 10) // ScrollY clamps to 0
-	if tab.Styles == nil {
-		t.Fatal("expected first render to highlight")
-	}
-	firstPtr := reflect.ValueOf(tab.Styles).Pointer()
-
-	// Scroll without moving the cursor (cursorMoved=false so EnsureVisible
-	// doesn't snap ScrollY back). The visible rows changed, so Render must
-	// re-tokenise even though StyleStale is false.
-	tab.ScrollY = 20
+	tab.ScrollY = tab.highlightEnd + 1
 	tab.cursorMoved = false
-	tab.Render(scr, theme.Default(), 0, 0, 40, 10)
-	if reflect.ValueOf(tab.Styles).Pointer() == firstPtr {
-		t.Fatal("expected Render to re-highlight after scroll")
+	tab.Render(scr, theme.Default(), 0, 0, 80, 20)
+	if &tab.Styles[0] == firstPtr || tab.ScrollY < tab.highlightStart {
+		t.Fatal("scroll outside prefetch window did not rebuild styles")
+	}
+}
+
+func TestTab_RenderRebuildsHighlightForThemeAndPath(t *testing.T) {
+	tab := highlightCacheTestTab(700)
+	scr := highlightCacheScreen(t)
+	base := theme.Default()
+	tab.Render(scr, base, 0, 0, 80, 20)
+	firstRows := tab.Styles
+	firstPtr := &firstRows[0]
+
+	changed := base
+	changed.SynString = tcell.ColorRed
+	tab.Render(scr, changed, 0, 0, 80, 20)
+	if &tab.Styles[0] == firstPtr {
+		t.Fatal("theme change reused stale styles")
+	}
+
+	themeRows := tab.Styles
+	themePtr := &themeRows[0]
+	tab.SetPath("data.yaml")
+	if !tab.StyleStale {
+		t.Fatal("path change did not invalidate lexer cache")
+	}
+	tab.Render(scr, changed, 0, 0, 80, 20)
+	if &tab.Styles[0] == themePtr {
+		t.Fatal("path change reused stale styles")
 	}
 }
 

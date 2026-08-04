@@ -228,6 +228,25 @@ func TestHighlightVisible_LeadRecoversCommentState(t *testing.T) {
 	}
 }
 
+func TestHighlightVisibleWindowReturnsOnlyRequestedRows(t *testing.T) {
+	lines := make([]string, 100000)
+	for i := range lines {
+		lines[i] = "{\"value\": 1}"
+	}
+	start, rows := highlightVisibleWindow("large.json", lines, 50000, 40, theme.Default())
+	if start != 50000 || len(rows) != 40 {
+		t.Fatalf("start=%d rows=%d, want 50000/40", start, len(rows))
+	}
+}
+
+func TestHighlightVisibleWindowClampsEdges(t *testing.T) {
+	lines := []string{"one", "two", "three"}
+	start, rows := highlightVisibleWindow("x.txt", lines, -4, 20, theme.Default())
+	if start != 0 || len(rows) != 3 {
+		t.Fatalf("start=%d rows=%d, want 0/3", start, len(rows))
+	}
+}
+
 // TestHighlight_MarkdownStructuralStyles overlays Glow-inspired document cues
 // without changing the shape of the style grid.
 func TestHighlight_MarkdownStructuralStyles(t *testing.T) {

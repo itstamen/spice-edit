@@ -149,7 +149,7 @@ func (a *App) doRenameFile(oldPath, newName string) {
 	// new name and its disk-reconciliation logic stays correct.
 	for _, t := range a.tabs {
 		if t.Path == oldPath {
-			t.Path = newPath
+			t.SetPath(newPath)
 			if info, err := os.Stat(newPath); err == nil {
 				t.Mtime = info.ModTime()
 			} else {
@@ -323,9 +323,9 @@ func (a *App) doRenameFolder(oldPath, newName string) {
 		case t.Path == oldPath:
 			// Defensive — tabs shouldn't be backed by directories,
 			// but if one is we still rewrite it cleanly.
-			t.Path = newPath
+			t.SetPath(newPath)
 		case strings.HasPrefix(t.Path, prefix):
-			t.Path = filepath.Join(newPath, t.Path[len(prefix):])
+			t.SetPath(filepath.Join(newPath, t.Path[len(prefix):]))
 		default:
 			continue
 		}

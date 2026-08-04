@@ -44,16 +44,12 @@ func Highlight(filename, src string, t theme.Theme) [][]tcell.Style {
 // mis-colours.
 const highlightLeadLines = 256
 
-// HighlightVisible returns a style grid for the current viewport. Only
-// visible rows are kept in the output so keystroke cost follows terminal
-// height, not file size. To stay correct inside multi-line comments and
-// strings that span the viewport, tokenisation starts a bounded lead above
-// the top and ends a bounded lead below the bottom; those lead rows are
-// styled then thrown away.
-func HighlightVisible(filename string, lines []string, startLine, height int, t theme.Theme) [][]tcell.Style {
-	styles := make([][]tcell.Style, len(lines))
-	if height <= 0 || startLine >= len(lines) {
-		return styles
+// highlightVisibleWindow returns only the requested style rows and their
+// absolute starting line. Tokenisation includes a bounded lead around the
+// requested range so multi-line lexer state can be reconstructed.
+func highlightVisibleWindow(filename string, lines []string, startLine, height int, t theme.Theme) (int, [][]tcell.Style) {
+	if height <= 0 || len(lines) == 0 || startLine >= len(lines) {
+		return 0, nil
 	}
 	if startLine < 0 {
 		startLine = 0
@@ -76,13 +72,26 @@ func HighlightVisible(filename string, lines []string, startLine, height int, t 
 	}
 	src := strings.Join(lines[leadStart:leadEnd], "\n")
 	leadStyles := highlightSource(filename, src, t)
+	rows := make([][]tcell.Style, endLine-startLine)
 	for i := startLine; i < endLine; i++ {
 		idx := i - leadStart
 		if idx >= len(leadStyles) {
 			break
 		}
-		styles[i] = leadStyles[idx]
+		rows[i-startLine] = leadStyles[idx]
 	}
+	return startLine, rows
+}
+
+// HighlightVisible is the absolute-grid compatibility wrapper used by callers
+// outside Tab rendering. The editor itself caches relative windows instead.
+func HighlightVisible(filename string, lines []string, startLine, height int, t theme.Theme) [][]tcell.Style {
+	styles := make([][]tcell.Style, len(lines))
+	start, rows := highlightVisibleWindow(filename, lines, startLine, height, t)
+	if start < 0 || start >= len(styles) {
+		return styles
+	}
+	copy(styles[start:], rows)
 	return styles
 }
 
