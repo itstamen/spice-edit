@@ -70,6 +70,11 @@ type Tab struct {
 	StyleStale  bool
 	GitLines    map[int]GitLineChange
 
+	// textRevision changes after every successful text mutation. The wrap
+	// layout is valid only for the width and revision it was built from.
+	textRevision uint64
+	wrapCache    wrapLayout
+
 	// lastHighlightScrollY / lastHighlightHeight record the viewport Render
 	// last tokenised for. Without them, every redraw (mouse moves included)
 	// would re-tokenise the visible rows even when nothing changed. Render
@@ -236,6 +241,18 @@ func (t *Tab) DisplayName() string {
 	return filepath.Base(t.Path)
 }
 
+// invalidateWrapLayout drops the width-sensitive visual-row index.
+func (t *Tab) invalidateWrapLayout() {
+	t.wrapCache = wrapLayout{}
+}
+
+// markTextChanged invalidates every cache derived from buffer content.
+func (t *Tab) markTextChanged() {
+	t.textRevision++
+	t.invalidateWrapLayout()
+	t.StyleStale = true
+}
+
 // Save writes the buffer to disk and clears Dirty. It is an error to call
 // Save on an untitled tab — callers should prompt for a path first. Mtime
 // is refreshed so the disk-reconcile loop doesn't immediately think the
@@ -306,7 +323,7 @@ func (t *Tab) Reload() error {
 	t.Dirty = false
 	t.DiskGone = false
 	t.Mtime = info.ModTime()
-	t.StyleStale = true
+	t.markTextChanged()
 	t.cursorMoved = true
 	// Reload re-establishes "what's on disk" as the new baseline. Any
 	// prior undo history is meaningless now (the line indices may have
@@ -345,7 +362,7 @@ func (t *Tab) DeleteSelection() {
 	t.Cursor = pos
 	t.Anchor = pos
 	t.Dirty = true
-	t.StyleStale = true
+	t.markTextChanged()
 	t.cursorMoved = true
 }
 
@@ -368,7 +385,7 @@ func (t *Tab) InsertString(s string) {
 	t.Cursor = t.Buffer.InsertString(t.Cursor, s)
 	t.Anchor = t.Cursor
 	t.Dirty = true
-	t.StyleStale = true
+	t.markTextChanged()
 	t.cursorMoved = true
 }
 
@@ -390,7 +407,7 @@ func (t *Tab) InsertRune(r rune) {
 	t.Cursor = t.Buffer.InsertString(t.Cursor, string(r))
 	t.Anchor = t.Cursor
 	t.Dirty = true
-	t.StyleStale = true
+	t.markTextChanged()
 	t.cursorMoved = true
 }
 
@@ -419,7 +436,7 @@ func (t *Tab) Backspace() {
 	t.Cursor = t.Buffer.DeleteRange(prev, t.Cursor)
 	t.Anchor = t.Cursor
 	t.Dirty = true
-	t.StyleStale = true
+	t.markTextChanged()
 	t.cursorMoved = true
 }
 
@@ -449,7 +466,7 @@ func (t *Tab) Delete() {
 	t.Cursor = t.Buffer.DeleteRange(t.Cursor, next)
 	t.Anchor = t.Cursor
 	t.Dirty = true
-	t.StyleStale = true
+	t.markTextChanged()
 	t.cursorMoved = true
 }
 

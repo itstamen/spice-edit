@@ -23,6 +23,15 @@ type wrapRow struct {
 	wrapSegment
 }
 
+// wrapLayout caches the visual rows and the starting visual-row index for
+// every logical line at one editor width and text revision.
+type wrapLayout struct {
+	width      int
+	revision   uint64
+	rows       []wrapRow
+	lineStarts []int
+}
+
 // wrapLine splits runes into grapheme-safe visual rows no wider than contentW
 // when possible. A single grapheme or tab wider than contentW is kept whole in
 // its own segment so rendering never slices a cluster across terminal rows.
@@ -61,44 +70,74 @@ func wrapLine(runes []rune, contentW int) []wrapSegment {
 	return segments
 }
 
-// wrapRows lays out the entire buffer into soft-wrapped visual rows.
-func (t *Tab) wrapRows(contentW int) []wrapRow {
+// wrapLayoutFor returns the cached soft-wrap layout for contentW, rebuilding
+// it only after the width or text revision changes.
+func (t *Tab) wrapLayoutFor(contentW int) *wrapLayout {
 	if contentW < 1 {
 		contentW = 1
 	}
-	rows := make([]wrapRow, 0, t.Buffer.LineCount())
-	for lineIdx := 0; lineIdx < t.Buffer.LineCount(); lineIdx++ {
+	if t == nil {
+		return &wrapLayout{width: contentW, rows: []wrapRow{{}}, lineStarts: []int{0}}
+	}
+	if t.Buffer == nil {
+		t.wrapCache = wrapLayout{
+			width: contentW, revision: t.textRevision,
+			rows: []wrapRow{{}}, lineStarts: []int{0},
+		}
+		return &t.wrapCache
+	}
+	if t.wrapCache.rows != nil &&
+		t.wrapCache.width == contentW &&
+		t.wrapCache.revision == t.textRevision {
+		return &t.wrapCache
+	}
+
+	lineCount := t.Buffer.LineCount()
+	rows := make([]wrapRow, 0, lineCount)
+	lineStarts := make([]int, lineCount+1)
+	for lineIdx := 0; lineIdx < lineCount; lineIdx++ {
+		lineStarts[lineIdx] = len(rows)
 		for _, segment := range wrapLine(t.Buffer.LineRunes(lineIdx), contentW) {
 			rows = append(rows, wrapRow{line: lineIdx, wrapSegment: segment})
 		}
 	}
+	lineStarts[lineCount] = len(rows)
 	if len(rows) == 0 {
 		rows = append(rows, wrapRow{})
 	}
-	return rows
+	t.wrapCache = wrapLayout{
+		width: contentW, revision: t.textRevision,
+		rows: rows, lineStarts: lineStarts,
+	}
+	return &t.wrapCache
+}
+
+// wrapRows returns the visual rows from the width-and-revision cache.
+func (t *Tab) wrapRows(contentW int) []wrapRow {
+	return t.wrapLayoutFor(contentW).rows
 }
 
 // visualRowForPosition returns the soft-wrapped row and cell for a logical
 // buffer position.
 func (t *Tab) visualRowForPosition(pos Position, contentW int) (int, int) {
 	pos = t.Buffer.Clamp(pos)
-	rows := t.wrapRows(contentW)
-	for rowIdx, row := range rows {
-		if row.line != pos.Line {
-			continue
-		}
-		if cursorInSegment(pos.Col, row.wrapSegment, rowIdx == len(rows)-1 || rows[rowIdx+1].line != row.line) {
+	layout := t.wrapLayoutFor(contentW)
+	start := layout.lineStarts[pos.Line]
+	end := layout.lineStarts[pos.Line+1]
+	for rowIdx := start; rowIdx < end; rowIdx++ {
+		row := layout.rows[rowIdx]
+		if cursorInSegment(pos.Col, row.wrapSegment, rowIdx == end-1) {
 			runes := t.Buffer.LineRunes(pos.Line)
 			return rowIdx, LineVisualCol(runes, pos.Col) - row.startVisual
 		}
 	}
-	return len(rows) - 1, rows[len(rows)-1].width
+	return end - 1, layout.rows[end-1].width
 }
 
 // positionAtVisualRow maps a soft-wrapped row and cell back to a logical
 // position, snapping clicks inside wide graphemes and tabs to the cluster start.
 func (t *Tab) positionAtVisualRow(rowIdx, targetCell, contentW int) Position {
-	rows := t.wrapRows(contentW)
+	rows := t.wrapLayoutFor(contentW).rows
 	if rowIdx < 0 {
 		rowIdx = 0
 	}
@@ -123,7 +162,7 @@ func (t *Tab) positionAtVisualRow(rowIdx, targetCell, contentW int) Position {
 
 // clampWrapScroll keeps the soft-wrap viewport inside the visual row layout.
 func (t *Tab) clampWrapScroll(contentW, viewH int) []wrapRow {
-	rows := t.wrapRows(contentW)
+	rows := t.wrapLayoutFor(contentW).rows
 	if t.WrapScrollY < 0 {
 		t.WrapScrollY = 0
 	}

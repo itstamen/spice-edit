@@ -125,7 +125,7 @@ func (t *Tab) ToggleLineComment() (changed bool, ok bool) {
 	t.Cursor = t.Buffer.Clamp(t.Cursor)
 	t.Anchor = t.Buffer.Clamp(t.Anchor)
 	t.Dirty = true
-	t.StyleStale = true
+	t.markTextChanged()
 	t.cursorMoved = true
 	return true, true
 }
