@@ -51,7 +51,8 @@ The goals, in order:
 - **Mouse-driven everything** — click to place cursor, drag to select,
   scroll wheel scrolls, double-click selects a word, drag past the edge
   to auto-scroll a selection.
-- **Syntax highlighting** for dozens of languages via Chroma.
+- **Syntax highlighting** for dozens of languages via Chroma, with cached
+  rendering that keeps large-file navigation responsive.
 - **Correct CJK and Unicode layout** — Chinese, Japanese, Korean, and
   combining characters use their terminal cell widths in file names, editor
   content, menus, and prompts. Fixes [#39](https://github.com/cloudmanic/spice-edit/issues/39).

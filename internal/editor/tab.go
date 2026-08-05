@@ -28,8 +28,14 @@ import (
 // never overlaps the first digit.
 const defaultGutterWidth = 6
 
-// highlightPrefetchLines keeps nearby scrolls inside one syntax cache window.
-const highlightPrefetchLines = 256
+const (
+	// highlightPrefetchLines keeps nearby scrolls inside one syntax cache window.
+	highlightPrefetchLines = 256
+
+	// highlightWholeFileLines avoids cache-boundary recolouring for normal-sized
+	// files. Larger files retain a bounded moving window.
+	highlightWholeFileLines = 2048
+)
 
 // gutterWidthFor returns the line-number column width for a buffer of
 // lineCount lines. It keeps defaultGutterWidth for files that fit and grows
@@ -263,6 +269,74 @@ func (t *Tab) markTextChanged() {
 	t.StyleStale = true
 }
 
+// highlightWindowBounds returns the bounded cache range around the viewport.
+// Normal-sized files stay fully highlighted so scrolling never crosses a
+// syntax-cache boundary.
+func (t *Tab) highlightWindowBounds(start, end int) (int, int) {
+	lineCount := t.Buffer.LineCount()
+	if lineCount <= highlightWholeFileLines {
+		return 0, lineCount
+	}
+	cacheStart := start - highlightPrefetchLines
+	if cacheStart < 0 {
+		cacheStart = 0
+	}
+	cacheEnd := end + highlightPrefetchLines
+	if cacheEnd > lineCount {
+		cacheEnd = lineCount
+	}
+	return cacheStart, cacheEnd
+}
+
+// rebuildHighlightWindow replaces the syntax cache after content, path,
+// theme, or a non-overlapping viewport jump makes every old row unusable.
+func (t *Tab) rebuildHighlightWindow(start, end int, th theme.Theme) {
+	windowStart, rows := highlightVisibleWindow(
+		t.Path, t.Buffer.Lines, start, end-start, th,
+	)
+	t.Styles = rows
+	t.highlightStart = windowStart
+	t.highlightEnd = windowStart + len(rows)
+	t.highlightTheme = th
+	t.hasHighlightTheme = true
+	t.StyleStale = false
+}
+
+// extendHighlightWindow adds only missing rows, then trims the opposite edge
+// back to the desired bounded range. Existing overlapping style rows remain
+// intact so visible text does not change colour at a cache boundary.
+func (t *Tab) extendHighlightWindow(start, end int, th theme.Theme) {
+	if start < t.highlightStart {
+		_, leading := highlightVisibleWindow(
+			t.Path, t.Buffer.Lines, start, t.highlightStart-start, th,
+		)
+		rows := make([][]tcell.Style, 0, len(leading)+len(t.Styles))
+		rows = append(rows, leading...)
+		rows = append(rows, t.Styles...)
+		t.Styles = rows
+		t.highlightStart = start
+	}
+	if end > t.highlightEnd {
+		appendStart := t.highlightEnd
+		_, trailing := highlightVisibleWindow(
+			t.Path, t.Buffer.Lines, appendStart, end-appendStart, th,
+		)
+		t.Styles = append(t.Styles, trailing...)
+		t.highlightEnd = appendStart + len(trailing)
+	}
+	if t.highlightStart < start {
+		t.Styles = t.Styles[start-t.highlightStart:]
+		t.highlightStart = start
+	}
+	if t.highlightEnd > end {
+		t.Styles = t.Styles[:end-t.highlightStart]
+		t.highlightEnd = end
+	}
+	t.highlightTheme = th
+	t.hasHighlightTheme = true
+	t.StyleStale = false
+}
+
 // ensureHighlightWindow keeps a prefetched relative style window around the
 // visible logical lines, rebuilding only when the cached inputs no longer fit.
 func (t *Tab) ensureHighlightWindow(start, height int, th theme.Theme) {
@@ -289,23 +363,14 @@ func (t *Tab) ensureHighlightWindow(start, height int, th theme.Theme) {
 		return
 	}
 
-	cacheStart := start - highlightPrefetchLines
-	if cacheStart < 0 {
-		cacheStart = 0
+	cacheStart, cacheEnd := t.highlightWindowBounds(start, end)
+	cacheValid := !t.StyleStale && t.hasHighlightTheme && t.highlightTheme == th && len(t.Styles) > 0
+	cacheOverlaps := cacheStart < t.highlightEnd && cacheEnd > t.highlightStart
+	if !cacheValid || !cacheOverlaps {
+		t.rebuildHighlightWindow(cacheStart, cacheEnd, th)
+		return
 	}
-	cacheEnd := end + highlightPrefetchLines
-	if cacheEnd > lineCount {
-		cacheEnd = lineCount
-	}
-	windowStart, rows := highlightVisibleWindow(
-		t.Path, t.Buffer.Lines, cacheStart, cacheEnd-cacheStart, th,
-	)
-	t.Styles = rows
-	t.highlightStart = windowStart
-	t.highlightEnd = windowStart + len(rows)
-	t.highlightTheme = th
-	t.hasHighlightTheme = true
-	t.StyleStale = false
+	t.extendHighlightWindow(cacheStart, cacheEnd, th)
 }
 
 // highlightStylesForLine maps an absolute logical line into the relative

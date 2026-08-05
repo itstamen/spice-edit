@@ -1353,7 +1353,7 @@ func highlightCacheScreen(t *testing.T) tcell.SimulationScreen {
 }
 
 func TestTab_RenderReusesHighlightInsidePrefetchWindow(t *testing.T) {
-	tab := highlightCacheTestTab(700)
+	tab := highlightCacheTestTab(5000)
 	scr := highlightCacheScreen(t)
 	tab.Render(scr, theme.Default(), 0, 0, 80, 20)
 	first := reflect.ValueOf(tab.Styles).Pointer()
@@ -1363,6 +1363,67 @@ func TestTab_RenderReusesHighlightInsidePrefetchWindow(t *testing.T) {
 	tab.Render(scr, theme.Default(), 0, 0, 80, 20)
 	if got := reflect.ValueOf(tab.Styles).Pointer(); got != first {
 		t.Fatal("scroll inside prefetch window rebuilt styles")
+	}
+}
+
+func TestTab_RenderCachesWholeSmallFileHighlight(t *testing.T) {
+	tab := highlightCacheTestTab(700)
+	scr := highlightCacheScreen(t)
+	tab.Render(scr, theme.Default(), 0, 0, 80, 20)
+	first := reflect.ValueOf(tab.Styles).Pointer()
+
+	if tab.highlightStart != 0 || tab.highlightEnd != tab.Buffer.LineCount() {
+		t.Fatalf("highlight window=[%d,%d), want whole file [0,%d)", tab.highlightStart, tab.highlightEnd, tab.Buffer.LineCount())
+	}
+	for scrollY := 0; scrollY < tab.Buffer.LineCount(); scrollY += 17 {
+		tab.ScrollY = scrollY
+		tab.cursorMoved = false
+		tab.Render(scr, theme.Default(), 0, 0, 80, 20)
+		if got := reflect.ValueOf(tab.Styles).Pointer(); got != first {
+			t.Fatalf("small-file scroll at line %d rebuilt whole-file highlight cache", scrollY)
+		}
+	}
+}
+
+func TestTab_RenderExtendsHighlightWithoutReplacingOverlap(t *testing.T) {
+	tab := highlightCacheTestTab(5000)
+	scr := highlightCacheScreen(t)
+	tab.Render(scr, theme.Default(), 0, 0, 80, 20)
+	overlapLine := tab.highlightEnd - 10
+	overlapStyles := tab.highlightStylesForLine(overlapLine)
+	overlapPtr := &overlapStyles[0]
+
+	tab.ScrollY = overlapLine
+	tab.cursorMoved = false
+	tab.Render(scr, theme.Default(), 0, 0, 80, 20)
+	after := tab.highlightStylesForLine(overlapLine)
+	if &after[0] != overlapPtr {
+		t.Fatal("cache extension replaced styles for a still-visible overlap line")
+	}
+	if tab.highlightEnd <= overlapLine+20 {
+		t.Fatalf("highlightEnd=%d did not extend beyond viewport", tab.highlightEnd)
+	}
+}
+
+func TestTab_RenderPrependsHighlightWithoutReplacingOverlap(t *testing.T) {
+	tab := highlightCacheTestTab(5000)
+	scr := highlightCacheScreen(t)
+	tab.ScrollY = 1000
+	tab.cursorMoved = false
+	tab.Render(scr, theme.Default(), 0, 0, 80, 20)
+	overlapLine := tab.highlightStart + 10
+	overlapStyles := tab.highlightStylesForLine(overlapLine)
+	overlapPtr := &overlapStyles[0]
+
+	tab.ScrollY = tab.highlightStart - 5
+	tab.cursorMoved = false
+	tab.Render(scr, theme.Default(), 0, 0, 80, 20)
+	after := tab.highlightStylesForLine(overlapLine)
+	if &after[0] != overlapPtr {
+		t.Fatal("cache prepend replaced styles for a still-visible overlap line")
+	}
+	if tab.highlightStart >= overlapLine-5 {
+		t.Fatalf("highlightStart=%d did not extend above viewport", tab.highlightStart)
 	}
 }
 
@@ -1383,7 +1444,7 @@ func TestTab_RenderHighlightsClampedScrollAtEnd(t *testing.T) {
 }
 
 func TestTab_RenderRebuildsHighlightOutsidePrefetchWindow(t *testing.T) {
-	tab := highlightCacheTestTab(700)
+	tab := highlightCacheTestTab(5000)
 	scr := highlightCacheScreen(t)
 	tab.Render(scr, theme.Default(), 0, 0, 80, 20)
 	firstRows := tab.Styles
