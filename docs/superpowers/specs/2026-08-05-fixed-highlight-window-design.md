@@ -1,4 +1,4 @@
-# Fixed Syntax Highlight Window Design
+# Clamped Scroll Syntax Highlight Design
 
 ## Status
 
@@ -8,28 +8,23 @@
 ## Problem
 
 Large-file navigation can visibly flash between plain and syntax-coloured text.
-The existing rolling cache extends one line at a time after the viewport reaches
-its prefetched edge. Each extension tokenises a new source window, so fast
-PageDown input repeatedly performs expensive highlighting and flushes many
-intermediate frames.
+`RenderSoftWrap` derived the logical highlight range before it clamped an
+overshot `ScrollY` to the final viewport. The highlighter therefore cleared
+its cache for the out-of-range position, while the renderer drew the clamped
+position without syntax styles for one frame.
 
 ## Decision
 
-Use a fixed relative syntax-highlight window for large files. The cache covers
-the visible logical rows plus a bounded prefetch region above and below. A
-render reuses the cache whenever its visible rows fit entirely inside it. When
-the viewport leaves that range, the editor tokenises and installs one complete
-replacement window around the new viewport.
-
-Small files remain fully highlighted as a single cache to avoid any cache
-boundary during normal navigation.
+Derive the non-soft-wrap highlight range only after calling `clampScroll`.
+The highlighter and renderer then reference the same final logical viewport.
+The existing whole-file and bounded-window cache policies remain unchanged.
 
 ## Behaviour
 
-- Fast navigation inside the cached range does not invoke the highlighter.
-- Crossing a large-file cache boundary invokes the highlighter once for a
-  complete, already-styled window; the renderer does not grow or trim the
-  cache one line at a time.
+- Fast navigation that overshoots the document end clamps the scroll position
+  before it invokes the highlighter.
+- The first frame at the clamped final viewport has a populated relative style
+  row for its visible content.
 - Content edits, theme changes, and lexer-sensitive path changes invalidate
   the cache and rebuild it on the next render.
 - Soft-wrap rendering continues to derive the highlighted logical range from
@@ -37,22 +32,16 @@ boundary during normal navigation.
 
 ## Implementation
 
-- Remove incremental cache-extension helpers from `internal/editor/tab.go`.
-- Keep the existing whole-file threshold and bounded prefetch calculation.
-- Rebuild the cache only after invalidation or when the visible range no longer
-  fits inside the current cached window.
-- Update editor tests to assert that a boundary crossing replaces the complete
-  cache once, while subsequent navigation within the new window reuses it.
+- Move non-soft-wrap `highlightStart` and `highlightHeight` assignment after
+  `clampScroll(h)` in `internal/editor/tab.go`.
+- Add an editor regression test with an out-of-range `ScrollY` and assert that
+  the clamped first visible line has styles after one render.
 
 ## Validation
 
-- Add focused tests for large-file boundary crossing and repeated navigation
-  after that crossing.
+- Add a focused test for an overshot final viewport.
 - Run `gofmt` and `make test`.
 
 ## Out of Scope
 
-- Background or asynchronous highlighting.
-- Lexer state checkpoints or whole-file syntax caches for arbitrarily large
-  documents.
-- Changes to terminal frame batching or rendering APIs.
+- Changes to terminal frame batching, cache size, or rendering APIs.

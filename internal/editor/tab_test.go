@@ -1366,6 +1366,22 @@ func TestTab_RenderReusesHighlightInsidePrefetchWindow(t *testing.T) {
 	}
 }
 
+func TestTab_RenderHighlightsClampedScrollAtEnd(t *testing.T) {
+	tab := highlightCacheTestTab(5000)
+	scr := highlightCacheScreen(t)
+	tab.ScrollY = tab.Buffer.LineCount() + 100
+	tab.cursorMoved = false
+	tab.Render(scr, theme.Default(), 0, 0, 80, 20)
+
+	wantScrollY := tab.Buffer.LineCount() - 20 + 20/2
+	if tab.ScrollY != wantScrollY {
+		t.Fatalf("ScrollY=%d, want %d", tab.ScrollY, wantScrollY)
+	}
+	if styles := tab.highlightStylesForLine(tab.ScrollY); len(styles) == 0 {
+		t.Fatal("clamped final viewport has no syntax styles")
+	}
+}
+
 func TestTab_RenderRebuildsHighlightOutsidePrefetchWindow(t *testing.T) {
 	tab := highlightCacheTestTab(700)
 	scr := highlightCacheScreen(t)

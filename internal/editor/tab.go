@@ -708,7 +708,7 @@ func (t *Tab) RenderSoftWrap(scr tcell.Screen, th theme.Theme, x, y, w, h int, s
 	}
 
 	var wrapRows []wrapRow
-	highlightStart, highlightHeight := t.ScrollY, h
+	var highlightStart, highlightHeight int
 	if softWrap {
 		t.ScrollX = 0
 		wrapRows = t.clampWrapScroll(contentW, h)
@@ -722,6 +722,8 @@ func (t *Tab) RenderSoftWrap(scr tcell.Screen, th theme.Theme, x, y, w, h int, s
 		}
 	} else {
 		t.clampScroll(h)
+		highlightStart = t.ScrollY
+		highlightHeight = h
 	}
 	t.ensureHighlightWindow(highlightStart, highlightHeight, th)
 
