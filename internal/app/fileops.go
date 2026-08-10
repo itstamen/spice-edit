@@ -561,7 +561,15 @@ func (a *App) relativePathFor(path string) string {
 	if a.tree != nil && a.tree.Root != nil {
 		base = a.tree.Root.Path
 	}
-	rel, err := filepath.Rel(base, path)
+	absBase, err := filepath.Abs(base)
+	if err != nil {
+		return path
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	rel, err := filepath.Rel(absBase, absPath)
 	if err != nil {
 		return path
 	}

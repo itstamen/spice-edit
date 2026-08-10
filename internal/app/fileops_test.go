@@ -591,6 +591,30 @@ func TestRelativePathFor_RelativeRootDir(t *testing.T) {
 	}
 }
 
+// TestRelativePathFor_TreeFreeRelativeRoot keeps single-file mode anchored to
+// the opened directory even when its rootDir was supplied as a relative path.
+func TestRelativePathFor_TreeFreeRelativeRoot(t *testing.T) {
+	root := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(filepath.Dir(root)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+	workingDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a := &App{rootDir: "."}
+	target := filepath.Join(workingDir, "c", "d")
+	if got, want := a.relativePathFor(target), filepath.Join("c", "d"); got != want {
+		t.Fatalf("relativePathFor = %q, want %q", got, want)
+	}
+}
+
 // TestAbsolutePathFor_Resolves turns a relative path into a fully-qualified
 // absolute path so the clipboard contents work even if the user pastes
 // into a shell whose cwd doesn't match the editor's root.
