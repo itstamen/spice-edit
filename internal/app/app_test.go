@@ -1679,8 +1679,8 @@ func TestHandleMouse_AutoCopiesDoubleClickSelection(t *testing.T) {
 	copied := recordingClipboard(a, nil)
 	ex, ey, _, _ := a.editorRect()
 	click := func() {
-		a.handleMouse(tcell.NewEventMouse(ex+2, ey, tcell.Button1, tcell.ModNone))
-		a.handleMouse(tcell.NewEventMouse(ex+2, ey, tcell.ButtonNone, tcell.ModNone))
+		a.handleMouse(tcell.NewEventMouse(ex+8, ey, tcell.Button1, tcell.ModNone))
+		a.handleMouse(tcell.NewEventMouse(ex+8, ey, tcell.ButtonNone, tcell.ModNone))
 	}
 
 	click()
@@ -1854,6 +1854,41 @@ func TestHandleMouse_EmptyRowDoesNotPublishKeyboardSelection(t *testing.T) {
 	ex, ey, _, _ := a.editorRect()
 	a.handleMouse(tcell.NewEventMouse(ex+8, ey+1, tcell.Button1, tcell.ModNone))
 	a.handleMouse(tcell.NewEventMouse(ex+8, ey+1, tcell.ButtonNone, tcell.ModNone))
+
+	if a.dragMode != "" {
+		t.Fatalf("dragMode = %q, want empty", a.dragMode)
+	}
+	if a.clipBuf != "" {
+		t.Fatalf("clipBuf = %q, want empty", a.clipBuf)
+	}
+	if !a.copyToastUntil.IsZero() {
+		t.Fatalf("copyToastUntil = %v, want zero", a.copyToastUntil)
+	}
+}
+
+// TestHandleMouse_GutterDoesNotPublishKeyboardSelection keeps ordinary
+// line-number gutter clicks from starting a selection gesture.
+func TestHandleMouse_GutterDoesNotPublishKeyboardSelection(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(target, []byte("abcdef\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	tab := a.activeTabPtr()
+	tab.Anchor = editor.Position{Line: 0, Col: 0}
+	tab.Cursor = editor.Position{Line: 0, Col: 6}
+	a.copyToSystem = func(string) error {
+		t.Fatal("unexpected system clipboard write")
+		return nil
+	}
+	ex, ey, _, _ := a.editorRect()
+	a.handleMouse(tcell.NewEventMouse(ex+2, ey, tcell.Button1, tcell.ModNone))
+	if a.dragMode != "" {
+		t.Fatalf("gutter press dragMode = %q, want empty", a.dragMode)
+	}
+	a.handleMouse(tcell.NewEventMouse(ex+2, ey, tcell.ButtonNone, tcell.ModNone))
 
 	if a.dragMode != "" {
 		t.Fatalf("dragMode = %q, want empty", a.dragMode)

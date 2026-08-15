@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1921,23 +1922,36 @@ func (a *App) editorPress(x, y int) bool {
 		return false
 	}
 	ex, ey, ew, eh := a.editorRect()
-	if a.openGitHunkAt(tab, x-ex, y-ey, ew, eh) {
+	localX := x - ex
+	localY := y - ey
+	if a.openGitHunkAt(tab, localX, localY, ew, eh) {
 		return false
 	}
-	pos, ok := a.editorHitTest(tab, x-ex, y-ey, ew, eh)
+	pos, ok := a.editorHitTest(tab, localX, localY, ew, eh)
 	if !ok {
 		return false
 	}
+	textArea := localX >= editorTextStart(tab)
 
 	now := time.Now()
 	if a.lastClick.x == x && a.lastClick.y == y && now.Sub(a.lastClick.when) < doubleClickMs {
 		a.selectWordAt(tab, pos)
 		a.lastClick = clickRecord{} // prevent triple-click from selecting nothing.
-		return true
+		return textArea
 	}
 	a.lastClick = clickRecord{x: x, y: y, when: now}
 	tab.MoveCursorTo(pos, false)
-	return true
+	return textArea
+}
+
+// editorTextStart mirrors editor's private gutter-width formula so App can
+// distinguish text presses from gutter clicks before it starts a drag.
+func editorTextStart(tab *editor.Tab) int {
+	gutterWidth := 6
+	if width := len(strconv.Itoa(tab.Buffer.LineCount())) + 2; width > gutterWidth {
+		gutterWidth = width
+	}
+	return gutterWidth + 1
 }
 
 // openGitHunkAt opens a diff preview when the user clicks a gutter marker.
