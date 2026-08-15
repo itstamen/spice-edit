@@ -50,6 +50,8 @@ const (
 	minWidth            = 50
 	minHeight           = 24
 	statusFlashFor      = 3 * time.Second
+	copyToastMessage    = "Copied to clipboard"
+	copyToastHeight     = 3
 	doubleClickMs       = 500 * time.Millisecond
 	doubleEscMs         = 500 * time.Millisecond
 	wheelLines          = 3
@@ -388,14 +390,16 @@ type App struct {
 	// drag the splitter to change it within [minSidebarWidth, width-minEditorAfterDrag].
 	sidebarWidth int
 
-	clipBuf      string
-	statusMsg    string
-	statusUntil  time.Time
-	openPath     pathOpener
-	revealPath   pathRevealer
-	dragMode     string // "editor" while a drag-select is active.
-	lastClick    clickRecord
-	lastTabRects []tabRect
+	clipBuf        string
+	copyToSystem   func(string) error
+	copyToastUntil time.Time
+	statusMsg      string
+	statusUntil    time.Time
+	openPath       pathOpener
+	revealPath     pathRevealer
+	dragMode       string // "editor" while a drag-select is active.
+	lastClick      clickRecord
+	lastTabRects   []tabRect
 
 	// lastShiftAt is the wall-clock time we last saw any mouse event
 	// carrying the Shift modifier. Some terminals (notably Zellij over
@@ -552,6 +556,7 @@ func New(rootDir string) (*App, error) {
 
 	a := &App{
 		screen:         scr,
+		copyToSystem:   clipboard.CopyToSystem,
 		theme:          th,
 		rootDir:        rootDir,
 		tree:           tree,
@@ -613,6 +618,7 @@ func NewSingleFile(filePath string) (*App, error) {
 
 	a := &App{
 		screen:         scr,
+		copyToSystem:   clipboard.CopyToSystem,
 		theme:          th,
 		rootDir:        rootDir,
 		tree:           nil,
@@ -1334,6 +1340,25 @@ func (a *App) editorRect() (x, y, w, h int) {
 	return sw, 1, a.width - sw, h
 }
 
+// copyToastRect returns the bounded, bottom-centered toast rectangle.
+func (a *App) copyToastRect() (x, y, w, h int, ok bool) {
+	ex, ey, ew, eh := a.editorRect()
+	if ew < 4 || eh < copyToastHeight {
+		return 0, 0, 0, 0, false
+	}
+	w = textWidth("● "+copyToastMessage) + 4
+	if w > ew {
+		w = ew
+	}
+	h = copyToastHeight
+	x = ex + (ew-w)/2
+	y = ey + eh - h
+	if eh > h {
+		y--
+	}
+	return x, y, w, h, true
+}
+
 // statusRect returns the status bar's screen rectangle (full-width bottom row).
 func (a *App) statusRect() (x, y, w, h int) {
 	return 0, a.height - 1, a.width, 1
@@ -1677,9 +1702,14 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		return
 	}
 
-	// Button released — exit any drag mode we were in.
+	// Button released — exit any drag mode we were in. Preserve the prior
+	// mode long enough to publish a completed editor selection exactly once.
+	completedDragMode := a.dragMode
 	a.dragMode = ""
 	a.stopAutoScroll()
+	if completedDragMode == "editor" {
+		a.autoCopyMouseSelection()
+	}
 }
 
 // handleMenuMouse processes mouse events while the action menu is open.
@@ -2499,19 +2529,37 @@ func (a *App) closeTabs(targets []*editor.Tab) {
 }
 
 // copySelection puts the active tab's selection on the system clipboard
-// (via OSC 52) and into the editor's internal clipboard.
-func (a *App) copySelection() {
+// (via OSC 52) and into the editor's internal clipboard. It reports whether
+// the system write completed so gesture-specific feedback can be shown once.
+func (a *App) copySelection() bool {
 	tab := a.activeTabPtr()
 	if tab == nil || !tab.HasSelection() {
-		return
+		return false
 	}
 	txt := tab.SelectionText()
 	a.clipBuf = txt
-	if err := clipboard.CopyToSystem(txt); err != nil {
+	copyToSystem := a.copyToSystem
+	if copyToSystem == nil {
+		copyToSystem = clipboard.CopyToSystem
+	}
+	if err := copyToSystem(txt); err != nil {
 		a.flash("Copied (system clipboard unavailable)")
-		return
+		return false
 	}
 	a.flash("Copied")
+	return true
+}
+
+// autoCopyMouseSelection publishes a completed editable mouse selection once
+// and only exposes the confirmation toast after OSC 52 succeeds.
+func (a *App) autoCopyMouseSelection() {
+	tab := a.activeTabPtr()
+	if tab == nil || tab.IsReadOnly() || !tab.HasSelection() {
+		return
+	}
+	if a.copySelection() {
+		a.copyToastUntil = time.Now().Add(statusFlashFor)
+	}
 }
 
 // cutSelection copies the selection then deletes it.
@@ -3049,6 +3097,7 @@ func (a *App) draw() {
 		a.drawFindBar()
 	}
 	a.drawStatusBar()
+	a.drawCopyToast()
 
 	// Modal layering, bottom-up. Only one of these is open at a time
 	// (closeAllModals enforces it), but the order still matters so a
@@ -3303,6 +3352,41 @@ func (a *App) drawStatusBar() {
 		leftMax = 0
 	}
 	drawStatusText(a.screen, sx, sy, leftMax, left, style)
+}
+
+// drawCopyToast paints the short success overlay for a mouse-driven copy.
+func (a *App) drawCopyToast() {
+	if !time.Now().Before(a.copyToastUntil) {
+		return
+	}
+	tx, ty, tw, th, ok := a.copyToastRect()
+	if !ok {
+		return
+	}
+	borderStyle := tcell.StyleDefault.Background(a.theme.SidebarBG).Foreground(a.theme.GitAdded)
+	fillRect(a.screen, tx, ty, tw, th, borderStyle)
+	a.screen.SetContent(tx, ty, '┌', nil, borderStyle)
+	a.screen.SetContent(tx+tw-1, ty, '┐', nil, borderStyle)
+	a.screen.SetContent(tx, ty+th-1, '└', nil, borderStyle)
+	a.screen.SetContent(tx+tw-1, ty+th-1, '┘', nil, borderStyle)
+	for cx := tx + 1; cx < tx+tw-1; cx++ {
+		a.screen.SetContent(cx, ty, '─', nil, borderStyle)
+		a.screen.SetContent(cx, ty+th-1, '─', nil, borderStyle)
+	}
+	for cy := ty + 1; cy < ty+th-1; cy++ {
+		a.screen.SetContent(tx, cy, '│', nil, borderStyle)
+		a.screen.SetContent(tx+tw-1, cy, '│', nil, borderStyle)
+	}
+	contentX := tx + 2
+	contentW := tw - 4
+	if contentW < 1 {
+		return
+	}
+	a.screen.SetContent(contentX, ty+1, '●', nil, borderStyle)
+	if contentW > 2 {
+		messageStyle := tcell.StyleDefault.Background(a.theme.SidebarBG).Foreground(a.theme.Text)
+		drawAtWidth(a.screen, contentX+2, ty+1, contentW-2, copyToastMessage, messageStyle)
+	}
 }
 
 // drawTooSmall paints a centred error message when the terminal window is

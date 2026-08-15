@@ -15,6 +15,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,6 +50,7 @@ func newTestApp(t *testing.T, root string) *App {
 	}
 	a := &App{
 		screen:         scr,
+		copyToSystem:   func(string) error { return nil },
 		showFrame:      scr.Show,
 		theme:          theme.Default(),
 		rootDir:        tree.Root.Path,
@@ -60,6 +62,17 @@ func newTestApp(t *testing.T, root string) *App {
 	a.setActiveFolder(tree.Root.Path)
 	a.width, a.height = scr.Size()
 	return a
+}
+
+// recordingClipboard installs a deterministic system clipboard writer and
+// returns every text value the app attempted to publish.
+func recordingClipboard(a *App, err error) *[]string {
+	var copied []string
+	a.copyToSystem = func(text string) error {
+		copied = append(copied, text)
+		return err
+	}
+	return &copied
 }
 
 // TestSidebarW_ShownVsHidden verifies the sidebar width helper returns 0
@@ -1613,6 +1626,173 @@ func TestHandleMouse_LeftPressInEditor(t *testing.T) {
 	}
 }
 
+// TestHandleMouse_AutoCopiesDragSelection publishes a completed editor drag
+// once, retaining the text internally and displaying its confirmation toast.
+func TestHandleMouse_AutoCopiesDragSelection(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(target, []byte("abcdef\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	copied := recordingClipboard(a, nil)
+	ex, ey, _, _ := a.editorRect()
+
+	a.handleMouse(tcell.NewEventMouse(ex+8, ey, tcell.Button1, tcell.ModNone))
+	a.handleMouse(tcell.NewEventMouse(ex+12, ey, tcell.Button1, tcell.ModNone))
+	a.handleMouse(tcell.NewEventMouse(ex+12, ey, tcell.ButtonNone, tcell.ModNone))
+
+	if got := *copied; len(got) != 1 || got[0] == "" {
+		t.Fatalf("drag copy = %#v, want one non-empty value", got)
+	}
+	if a.clipBuf != (*copied)[0] {
+		t.Fatalf("clipBuf = %q, want %q", a.clipBuf, (*copied)[0])
+	}
+	if !time.Now().Before(a.copyToastUntil) {
+		t.Fatal("expected copy toast after successful drag copy")
+	}
+	if a.dragMode != "" {
+		t.Fatalf("dragMode = %q, want cleared", a.dragMode)
+	}
+	if a.autoScrollDir != 0 {
+		t.Fatalf("autoScrollDir = %d, want 0", a.autoScrollDir)
+	}
+
+	a.handleMouse(tcell.NewEventMouse(ex+12, ey, tcell.ButtonNone, tcell.ModNone))
+	if got := len(*copied); got != 1 {
+		t.Fatalf("release copied %d times, want once", got)
+	}
+}
+
+// TestHandleMouse_AutoCopiesDoubleClickSelection copies the word selected by
+// a completed double-click, while an ordinary click remains a no-op.
+func TestHandleMouse_AutoCopiesDoubleClickSelection(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(target, []byte("hello world\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	copied := recordingClipboard(a, nil)
+	ex, ey, _, _ := a.editorRect()
+	click := func() {
+		a.handleMouse(tcell.NewEventMouse(ex+2, ey, tcell.Button1, tcell.ModNone))
+		a.handleMouse(tcell.NewEventMouse(ex+2, ey, tcell.ButtonNone, tcell.ModNone))
+	}
+
+	click()
+	if len(*copied) != 0 {
+		t.Fatalf("single click copied %#v", *copied)
+	}
+	click()
+	if got := *copied; len(got) != 1 || got[0] != "hello" {
+		t.Fatalf("double-click copy = %#v, want []string{\"hello\"}", got)
+	}
+	if !time.Now().Before(a.copyToastUntil) {
+		t.Fatal("expected copy toast after successful double-click copy")
+	}
+}
+
+// TestHandleMouse_AutoCopyGuards keeps non-selection and non-editor gestures
+// from changing either clipboard or copy-toast state.
+func TestHandleMouse_AutoCopyGuards(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(t *testing.T, a *App)
+	}{
+		{
+			name: "single editable click",
+			run: func(t *testing.T, a *App) {
+				target := filepath.Join(a.rootDir, "f.txt")
+				if err := os.WriteFile(target, []byte("hello\n"), 0o644); err != nil {
+					t.Fatalf("seed: %v", err)
+				}
+				a.openFile(target)
+				ex, ey, _, _ := a.editorRect()
+				a.handleMouse(tcell.NewEventMouse(ex+2, ey, tcell.Button1, tcell.ModNone))
+				a.handleMouse(tcell.NewEventMouse(ex+2, ey, tcell.ButtonNone, tcell.ModNone))
+			},
+		},
+		{
+			name: "sidebar splitter drag",
+			run: func(_ *testing.T, a *App) {
+				splitX := a.splitterX()
+				a.handleMouse(tcell.NewEventMouse(splitX, 5, tcell.Button1, tcell.ModNone))
+				a.handleMouse(tcell.NewEventMouse(splitX+3, 5, tcell.Button1, tcell.ModNone))
+				a.handleMouse(tcell.NewEventMouse(splitX+3, 5, tcell.ButtonNone, tcell.ModNone))
+			},
+		},
+		{
+			name: "release without tab",
+			run: func(_ *testing.T, a *App) {
+				a.dragMode = "editor"
+				a.handleMouse(tcell.NewEventMouse(60, 5, tcell.ButtonNone, tcell.ModNone))
+			},
+		},
+		{
+			name: "read-only tab",
+			run: func(t *testing.T, a *App) {
+				target := filepath.Join(a.rootDir, "manual.pdf")
+				if err := os.WriteFile(target, []byte("%PDF-1.7\n"), 0o644); err != nil {
+					t.Fatalf("seed: %v", err)
+				}
+				a.openFile(target)
+				ex, ey, _, _ := a.editorRect()
+				a.handleMouse(tcell.NewEventMouse(ex+2, ey, tcell.Button1, tcell.ModNone))
+				a.handleMouse(tcell.NewEventMouse(ex+6, ey, tcell.Button1, tcell.ModNone))
+				a.handleMouse(tcell.NewEventMouse(ex+6, ey, tcell.ButtonNone, tcell.ModNone))
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTestApp(t, t.TempDir())
+			a.copyToSystem = func(string) error {
+				t.Fatal("unexpected system clipboard write")
+				return nil
+			}
+			tc.run(t, a)
+			if a.clipBuf != "" {
+				t.Fatalf("clipBuf = %q, want empty", a.clipBuf)
+			}
+			if !a.copyToastUntil.IsZero() {
+				t.Fatalf("copyToastUntil = %v, want zero", a.copyToastUntil)
+			}
+		})
+	}
+}
+
+// TestHandleMouse_AutoCopyWriteFailure retains the internal selection when
+// OSC 52 fails but does not expose a success-only toast.
+func TestHandleMouse_AutoCopyWriteFailure(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(target, []byte("abcdef\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	copied := recordingClipboard(a, errors.New("tty unavailable"))
+	ex, ey, _, _ := a.editorRect()
+	a.handleMouse(tcell.NewEventMouse(ex+8, ey, tcell.Button1, tcell.ModNone))
+	a.handleMouse(tcell.NewEventMouse(ex+12, ey, tcell.Button1, tcell.ModNone))
+	a.handleMouse(tcell.NewEventMouse(ex+12, ey, tcell.ButtonNone, tcell.ModNone))
+
+	if got := len(*copied); got != 1 {
+		t.Fatalf("clipboard writes = %d, want 1", got)
+	}
+	if a.clipBuf == "" {
+		t.Fatal("failed system copy should retain internal clipboard")
+	}
+	if !a.copyToastUntil.IsZero() {
+		t.Fatalf("copyToastUntil = %v, want zero", a.copyToastUntil)
+	}
+	if a.statusMsg != "Copied (system clipboard unavailable)" {
+		t.Fatalf("statusMsg = %q", a.statusMsg)
+	}
+}
+
 // TestHandleMouse_SidebarSplitterDrag enters splitter drag and resizes.
 func TestHandleMouse_SidebarSplitterDrag(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
@@ -1703,6 +1883,53 @@ func TestDraw_AllPanels(t *testing.T) {
 	// Tiny window → too-small message.
 	a.width, a.height = 5, 5
 	a.draw()
+}
+
+// TestDrawCopyToast_RenderingAndExpiry verifies successful mouse-copy
+// feedback stays inside the editor, uses the success colour, and disappears
+// after its deadline without disturbing narrow layouts.
+func TestDrawCopyToast_RenderingAndExpiry(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	scr := a.screen.(tcell.SimulationScreen)
+	a.copyToastUntil = time.Now().Add(time.Second)
+	a.draw()
+	scr.Show()
+
+	tx, ty, tw, th, ok := a.copyToastRect()
+	if !ok {
+		t.Fatal("expected toast rectangle")
+	}
+	ex, ey, ew, eh := a.editorRect()
+	if tx < ex || ty < ey || tx+tw > ex+ew || ty+th > ey+eh {
+		t.Fatalf("toast rect (%d,%d,%d,%d) outside editor (%d,%d,%d,%d)", tx, ty, tw, th, ex, ey, ew, eh)
+	}
+	border, borderStyle, _ := scr.Get(tx, ty)
+	if border != "┌" {
+		t.Fatalf("toast corner = %q, want ┌", border)
+	}
+	fg, _, _ := borderStyle.Decompose()
+	if fg != a.theme.GitAdded {
+		t.Fatalf("toast border foreground = %v, want %v", fg, a.theme.GitAdded)
+	}
+	if line := screenLine(scr, ty+1); !strings.Contains(line, "Copied to clipboard") {
+		t.Fatalf("toast line = %q", line)
+	}
+
+	a.copyToastUntil = time.Now().Add(-time.Second)
+	a.draw()
+	scr.Show()
+	border, _, _ = scr.Get(tx, ty)
+	if border == "┌" {
+		t.Fatal("expired toast remained visible")
+	}
+
+	a.width = minWidth
+	a.height = 40
+	a.sidebarShown = true
+	scr.SetSize(a.width, a.height)
+	if nx, ny, nw, nh, visible := a.copyToastRect(); visible && (nx < a.sidebarW() || ny < 1 || nx+nw > a.width || ny+nh > a.height-1) {
+		t.Fatalf("narrow toast rect (%d,%d,%d,%d) outside editor", nx, ny, nw, nh)
+	}
 }
 
 // TestTabBarClick_ClosesViaX clicks the × in a tab and verifies the close
