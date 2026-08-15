@@ -56,3 +56,50 @@ func TestDarwinRevealErrorAddsAccessibilityHint(t *testing.T) {
 		})
 	}
 }
+
+// TestFinderTabRevealScriptReusesExistingTabs requires a full-path scan before
+// the new-tab fallback.
+func TestFinderTabRevealScriptReusesExistingTabs(t *testing.T) {
+	scanFragments := []string{
+		"on activateMatchingFinderTab(targetFolderPath)",
+		"set finderWindowIDs to id of every Finder window",
+		"repeat with finderWindowID in finderWindowIDs",
+		"set index of Finder window id (contents of finderWindowID) to 1",
+		"set tabButtons to radio buttons of tab group 1 of front window",
+		"click tabButton",
+	}
+	last := -1
+	for _, fragment := range scanFragments {
+		index := strings.Index(finderTabRevealScript, fragment)
+		if index == -1 {
+			t.Fatalf("script is missing %q", fragment)
+		}
+		if index < last {
+			t.Fatalf("script orders %q before a required prior scan step", fragment)
+		}
+		last = index
+	}
+	matchedTabIndex := strings.Index(finderTabRevealScript[last:], "if my activeFinderTargetPath() is targetFolderPath then return true")
+	if matchedTabIndex == -1 {
+		t.Fatal("script does not compare a clicked tab's folder with the target")
+	}
+
+	runFragments := []string{
+		"set targetFolderPath to POSIX path of targetFolder",
+		"set originalFrontWindow to front Finder window",
+		"if my activateMatchingFinderTab(targetFolderPath) then return",
+		"set index of originalFrontWindow to 1",
+		"keystroke \"t\" using {command down}",
+	}
+	last = -1
+	for _, fragment := range runFragments {
+		index := strings.Index(finderTabRevealScript, fragment)
+		if index == -1 {
+			t.Fatalf("script is missing %q", fragment)
+		}
+		if index < last {
+			t.Fatalf("script orders %q before a required prior run step", fragment)
+		}
+		last = index
+	}
+}
