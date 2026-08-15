@@ -23,11 +23,25 @@ const finderTabRevealScript = `on activeFinderTargetPath()
 	end tell
 end activeFinderTargetPath
 
+on waitForFinderWindow()
+	tell application "System Events"
+		tell process "Finder"
+			set frontmost to true
+			repeat 10 times
+				if exists window 1 then return true
+				delay 0.05
+			end repeat
+		end tell
+	end tell
+	return false
+end waitForFinderWindow
+
 on activateMatchingFinderTab(targetFolderPath)
 	tell application "Finder" to set finderWindowIDs to id of every Finder window
 	repeat with finderWindowID in finderWindowIDs
 		tell application "Finder" to set index of Finder window id (contents of finderWindowID) to 1
 		delay 0.05
+		if not my waitForFinderWindow() then error "Finder UI did not become ready for tab automation"
 		tell application "System Events"
 			tell process "Finder"
 				set tabGroups to tab groups of front window
@@ -60,6 +74,7 @@ on run argv
 	end tell
 	if my activateMatchingFinderTab(targetFolderPath) then return
 	tell application "Finder" to set index of originalFrontWindow to 1
+	if not my waitForFinderWindow() then error "Finder UI did not become ready for tab automation"
 	tell application "System Events"
 		tell process "Finder"
 			set frontmost to true

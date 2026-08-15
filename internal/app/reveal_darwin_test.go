@@ -102,4 +102,29 @@ func TestFinderTabRevealScriptReusesExistingTabs(t *testing.T) {
 		}
 		last = index
 	}
+
+	readinessFragments := []string{
+		"on waitForFinderWindow()",
+		"set frontmost to true",
+		"repeat 10 times",
+		"if exists window 1 then return true",
+		"delay 0.05",
+		"return false",
+	}
+	for _, fragment := range readinessFragments {
+		if !strings.Contains(finderTabRevealScript, fragment) {
+			t.Fatalf("script is missing readiness fragment %q", fragment)
+		}
+	}
+
+	readinessCall := "if not my waitForFinderWindow() then error \"Finder UI did not become ready for tab automation\""
+	if strings.Count(finderTabRevealScript, readinessCall) != 2 {
+		t.Fatalf("readiness calls = %d, want 2", strings.Count(finderTabRevealScript, readinessCall))
+	}
+	if strings.Index(finderTabRevealScript, readinessCall) > strings.Index(finderTabRevealScript, "set tabGroups to tab groups of front window") {
+		t.Fatal("tab scan starts before Finder UI readiness check")
+	}
+	if strings.LastIndex(finderTabRevealScript, readinessCall) > strings.Index(finderTabRevealScript, "keystroke \"t\" using {command down}") {
+		t.Fatal("new-tab shortcut starts before Finder UI readiness check")
+	}
 }
