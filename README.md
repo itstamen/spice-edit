@@ -50,7 +50,8 @@ The goals, in order:
   top, editor in the middle, status bar at the bottom.
 - **Mouse-driven everything** — click to place cursor, drag to select,
   scroll wheel scrolls, double-click selects a word, drag past the edge
-  to auto-scroll a selection.
+  to auto-scroll a selection. Completed mouse selections automatically copy
+  to the system clipboard and show a brief confirmation toast.
 - **Syntax highlighting** for dozens of languages via Chroma, with cached
   rendering that keeps large-file navigation responsive.
 - **Correct CJK and Unicode layout** — Chinese, Japanese, Korean, and
