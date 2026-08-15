@@ -51,7 +51,7 @@ The goals, in order:
 - **Mouse-driven everything** — click to place cursor, drag to select,
   scroll wheel scrolls, double-click selects a word, drag past the edge
   to auto-scroll a selection. Completed mouse selections automatically copy
-  to the system clipboard and show a brief confirmation toast.
+  to the system clipboard.
 - **Syntax highlighting** for dozens of languages via Chroma, with cached
   rendering that keeps large-file navigation responsive.
 - **Correct CJK and Unicode layout** — Chinese, Japanese, Korean, and
