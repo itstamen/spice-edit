@@ -142,6 +142,17 @@ type customActionDoneEvent struct {
 // When satisfies the tcell.Event interface.
 func (e *customActionDoneEvent) When() time.Time { return e.when }
 
+// copyToastExpiredEvent wakes the event loop when one successful mouse-copy
+// confirmation reaches its captured deadline. The deadline identifies the
+// toast instance so an earlier timer cannot dismiss a refreshed toast.
+type copyToastExpiredEvent struct {
+	when  time.Time
+	until time.Time
+}
+
+// When satisfies the tcell.Event interface.
+func (e *copyToastExpiredEvent) When() time.Time { return e.when }
+
 // tabRect remembers where each tab was drawn so click handling can hit-test
 // against the actual rendered geometry rather than re-deriving it.
 type tabRect struct {
@@ -1135,6 +1146,8 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.refreshTreeNow()
 	case *customActionDoneEvent:
 		a.handleCustomActionDone(e)
+	case *copyToastExpiredEvent:
+		a.handleCopyToastExpiry(e)
 	case *defaultOpenDoneEvent:
 		a.handleDefaultOpenDone(e)
 	case *revealDoneEvent:
@@ -2575,7 +2588,32 @@ func (a *App) autoCopyMouseSelection() {
 	}
 	a.copyToastUntil = time.Time{}
 	if a.copySelection() {
-		a.copyToastUntil = time.Now().Add(statusFlashFor)
+		until := time.Now().Add(statusFlashFor)
+		a.copyToastUntil = until
+		a.scheduleCopyToastExpiry(until)
+	}
+}
+
+// scheduleCopyToastExpiry posts one wake-up event at until so an idle editor
+// redraws after the toast expires instead of waiting for unrelated input.
+func (a *App) scheduleCopyToastExpiry(until time.Time) {
+	if until.IsZero() || a.screen == nil {
+		return
+	}
+	scr := a.screen
+	go func() {
+		timer := time.NewTimer(time.Until(until))
+		defer timer.Stop()
+		<-timer.C
+		scr.PostEventWait(&copyToastExpiredEvent{when: time.Now(), until: until})
+	}()
+}
+
+// handleCopyToastExpiry clears only the toast instance whose timer fired.
+// A later successful copy has a different deadline and must remain visible.
+func (a *App) handleCopyToastExpiry(e *copyToastExpiredEvent) {
+	if e != nil && e.until.Equal(a.copyToastUntil) {
+		a.copyToastUntil = time.Time{}
 	}
 }
 

@@ -2040,6 +2040,72 @@ func TestDrawCopyToast_RenderingAndExpiry(t *testing.T) {
 	}
 }
 
+// TestRun_CopyToastExpiryRedrawsWithoutInput verifies the expiry event wakes
+// an otherwise idle event loop and removes the visible toast in its next frame.
+func TestRun_CopyToastExpiryRedrawsWithoutInput(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	scr := a.screen.(tcell.SimulationScreen)
+	a.copyToastUntil = time.Now().Add(time.Hour)
+	deadline := a.copyToastUntil
+
+	frames := 0
+	var firstFrameToast, expiryFrameToast bool
+	a.showFrame = func() {
+		scr.Show()
+		frames++
+		tx, ty, _, _, ok := a.copyToastRect()
+		if !ok {
+			t.Fatal("expected toast rectangle")
+		}
+		corner, _, _ := scr.Get(tx, ty)
+		switch frames {
+		case 1:
+			firstFrameToast = corner == "┌"
+		case 2:
+			expiryFrameToast = corner == "┌"
+			a.quit = true
+		}
+	}
+
+	if err := a.screen.PostEvent(&copyToastExpiredEvent{when: time.Now(), until: deadline}); err != nil {
+		t.Fatalf("post toast expiry: %v", err)
+	}
+	if err := a.Run(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if frames != 2 {
+		t.Fatalf("frames = %d, want 2", frames)
+	}
+	if !firstFrameToast {
+		t.Fatal("toast was not visible before the expiry event")
+	}
+	if expiryFrameToast {
+		t.Fatal("toast remained visible after expiry event")
+	}
+	if !a.copyToastUntil.IsZero() {
+		t.Fatalf("copyToastUntil = %v, want zero", a.copyToastUntil)
+	}
+}
+
+// TestHandleCopyToastExpiry_IgnoresStaleDeadline ensures a pending timer from
+// an earlier successful copy cannot clear or shorten a refreshed toast.
+func TestHandleCopyToastExpiry_IgnoresStaleDeadline(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	earlier := time.Now().Add(time.Second)
+	refreshed := earlier.Add(time.Second)
+	a.copyToastUntil = refreshed
+
+	a.handleCopyToastExpiry(&copyToastExpiredEvent{when: time.Now(), until: earlier})
+	if !a.copyToastUntil.Equal(refreshed) {
+		t.Fatalf("stale expiry changed deadline to %v, want %v", a.copyToastUntil, refreshed)
+	}
+
+	a.handleCopyToastExpiry(&copyToastExpiredEvent{when: time.Now(), until: refreshed})
+	if !a.copyToastUntil.IsZero() {
+		t.Fatalf("matching expiry left deadline = %v, want zero", a.copyToastUntil)
+	}
+}
+
 // TestTabBarClick_ClosesViaX clicks the × in a tab and verifies the close
 // path runs (clean tab → tab removed).
 func TestTabBarClick_ClosesViaX(t *testing.T) {
