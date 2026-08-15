@@ -15,7 +15,15 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+
+	"github.com/cloudmanic/spice-edit/internal/editor"
 )
+
+// sendLeader dispatches one Esc-leader sequence through the normal key path.
+func sendLeader(a *App, r rune) {
+	a.handleKey(keyEv(tcell.KeyEsc, 0))
+	a.handleKey(keyEv(tcell.KeyRune, r))
+}
 
 // TestLeaderActionFor_AllBindingsResolve walks the binding table and
 // verifies every entry returns a non-nil action. Catches accidentally
@@ -209,6 +217,84 @@ func TestHandleKey_LeaderToggleLineComment(t *testing.T) {
 
 	if got := a.activeTabPtr().Buffer.String(); got != "// one\ntwo" {
 		t.Fatalf("Esc-/ should comment the cursor line, got %q", got)
+	}
+}
+
+// TestHandleKey_LeaderClipboard verifies Esc clipboard bindings share the
+// guarded menu actions and Select All does not publish selection text.
+func TestHandleKey_LeaderClipboard(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "clipboard.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(path)
+	tab := a.activeTabPtr()
+	copied := recordingClipboard(a, nil)
+
+	tab.Anchor = editor.Position{Line: 0, Col: 0}
+	tab.Cursor = editor.Position{Line: 0, Col: 5}
+	sendLeader(a, 'c')
+	if got := *copied; len(got) != 1 || got[0] != "hello" {
+		t.Fatalf("copy writes = %#v, want []string{\"hello\"}", got)
+	}
+	if got := tab.Buffer.String(); got != "hello" {
+		t.Fatalf("copy text = %q, want unchanged", got)
+	}
+
+	tab.Anchor = editor.Position{Line: 0, Col: 0}
+	tab.Cursor = editor.Position{Line: 0, Col: 5}
+	sendLeader(a, 'x')
+	if got := *copied; len(got) != 2 || got[1] != "hello" {
+		t.Fatalf("cut writes = %#v, want second hello", got)
+	}
+	if got := tab.Buffer.String(); got != "" {
+		t.Fatalf("cut text = %q, want empty", got)
+	}
+
+	a.clipBuf = "hello"
+	sendLeader(a, 'v')
+	if got := tab.Buffer.String(); got != "hello" {
+		t.Fatalf("paste text = %q, want hello", got)
+	}
+
+	sendLeader(a, 'a')
+	if got := tab.SelectionText(); got != "hello" {
+		t.Fatalf("Select All selection = %q, want hello", got)
+	}
+	if got := len(*copied); got != 2 {
+		t.Fatalf("Select All writes = %d, want 2", got)
+	}
+}
+
+// TestHandleKey_LeaderSelectAllInertWithoutEditableTab keeps direct leader
+// dispatch safe when no editable text target is active.
+func TestHandleKey_LeaderSelectAllInertWithoutEditableTab(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		open func(t *testing.T, a *App)
+	}{
+		{name: "no tab", open: func(_ *testing.T, _ *App) {}},
+		{
+			name: "external pdf",
+			open: func(t *testing.T, a *App) {
+				path := filepath.Join(a.rootDir, "blocked.pdf")
+				if err := os.WriteFile(path, []byte("%PDF-1.7\n"), 0o644); err != nil {
+					t.Fatalf("seed: %v", err)
+				}
+				a.openFile(path)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTestApp(t, t.TempDir())
+			tc.open(t, a)
+			sendLeader(a, 'a')
+			if tab := a.activeTabPtr(); tab != nil && tab.HasSelection() {
+				t.Fatal("Esc-a should not select external tab")
+			}
+		})
 	}
 }
 

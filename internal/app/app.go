@@ -51,8 +51,6 @@ const (
 	minWidth            = 50
 	minHeight           = 24
 	statusFlashFor      = 3 * time.Second
-	copyToastMessage    = "Copied to clipboard"
-	copyToastHeight     = 3
 	doubleClickMs       = 500 * time.Millisecond
 	doubleEscMs         = 500 * time.Millisecond
 	wheelLines          = 3
@@ -141,17 +139,6 @@ type customActionDoneEvent struct {
 
 // When satisfies the tcell.Event interface.
 func (e *customActionDoneEvent) When() time.Time { return e.when }
-
-// copyToastExpiredEvent wakes the event loop when one successful mouse-copy
-// confirmation reaches its captured deadline. The deadline identifies the
-// toast instance so an earlier timer cannot dismiss a refreshed toast.
-type copyToastExpiredEvent struct {
-	when  time.Time
-	until time.Time
-}
-
-// When satisfies the tcell.Event interface.
-func (e *copyToastExpiredEvent) When() time.Time { return e.when }
 
 // tabRect remembers where each tab was drawn so click handling can hit-test
 // against the actual rendered geometry rather than re-deriving it.
@@ -245,9 +232,10 @@ func builtinMenuGroups() [][]menuItemDef {
 		},
 		// Clipboard
 		{
-			{label: "Copy selection", action: (*App).menuCopy, enabled: (*App).hasSelection},
-			{label: "Cut selection", action: (*App).menuCut, enabled: (*App).hasSelection},
-			{label: "Paste", action: (*App).menuPaste, enabled: (*App).hasClipboard},
+			{label: "Copy selection", shortcut: "Esc c", action: (*App).menuCopy, enabled: (*App).hasSelection},
+			{label: "Cut selection", shortcut: "Esc x", action: (*App).menuCut, enabled: (*App).hasSelection},
+			{label: "Paste", shortcut: "Esc v", action: (*App).menuPaste, enabled: (*App).hasPasteTarget},
+			{label: "Select all", shortcut: "Esc a", action: (*App).menuSelectAll, enabled: (*App).hasEditableTextTab},
 			{label: "Toggle line comment", shortcut: "Esc /", action: (*App).menuToggleLineComment, enabled: (*App).hasCommentableTab},
 		},
 		// View toggle
@@ -402,16 +390,15 @@ type App struct {
 	// drag the splitter to change it within [minSidebarWidth, width-minEditorAfterDrag].
 	sidebarWidth int
 
-	clipBuf        string
-	copyToSystem   func(string) error
-	copyToastUntil time.Time
-	statusMsg      string
-	statusUntil    time.Time
-	openPath       pathOpener
-	revealPath     pathRevealer
-	dragMode       string // "editor" while a drag-select is active.
-	lastClick      clickRecord
-	lastTabRects   []tabRect
+	clipBuf      string
+	copyToSystem func(string) error
+	statusMsg    string
+	statusUntil  time.Time
+	openPath     pathOpener
+	revealPath   pathRevealer
+	dragMode     string // "editor" while a drag-select is active.
+	lastClick    clickRecord
+	lastTabRects []tabRect
 
 	// lastShiftAt is the wall-clock time we last saw any mouse event
 	// carrying the Shift modifier. Some terminals (notably Zellij over
@@ -1146,8 +1133,6 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.refreshTreeNow()
 	case *customActionDoneEvent:
 		a.handleCustomActionDone(e)
-	case *copyToastExpiredEvent:
-		a.handleCopyToastExpiry(e)
 	case *defaultOpenDoneEvent:
 		a.handleDefaultOpenDone(e)
 	case *revealDoneEvent:
@@ -1352,25 +1337,6 @@ func (a *App) editorRect() (x, y, w, h int) {
 		h -= findBarHeight
 	}
 	return sw, 1, a.width - sw, h
-}
-
-// copyToastRect returns the bounded, bottom-centered toast rectangle.
-func (a *App) copyToastRect() (x, y, w, h int, ok bool) {
-	ex, ey, ew, eh := a.editorRect()
-	if ew < 4 || eh < copyToastHeight {
-		return 0, 0, 0, 0, false
-	}
-	w = textWidth("● "+copyToastMessage) + 4
-	if w > ew {
-		w = ew
-	}
-	h = copyToastHeight
-	x = ex + (ew-w)/2
-	y = ey + eh - h
-	if eh > h {
-		y--
-	}
-	return x, y, w, h, true
 }
 
 // statusRect returns the status bar's screen rectangle (full-width bottom row).
@@ -2558,12 +2524,11 @@ func (a *App) closeTabs(targets []*editor.Tab) {
 }
 
 // copySelection puts the active tab's selection on the system clipboard
-// (via OSC 52) and into the editor's internal clipboard. It reports whether
-// the system write completed so gesture-specific feedback can be shown once.
-func (a *App) copySelection() bool {
+// (via OSC 52) and into the editor's internal clipboard.
+func (a *App) copySelection() {
 	tab := a.activeTabPtr()
 	if tab == nil || !tab.HasSelection() {
-		return false
+		return
 	}
 	txt := tab.SelectionText()
 	a.clipBuf = txt
@@ -2573,48 +2538,18 @@ func (a *App) copySelection() bool {
 	}
 	if err := copyToSystem(txt); err != nil {
 		a.flash("Copied (system clipboard unavailable)")
-		return false
+		return
 	}
 	a.flash("Copied")
-	return true
 }
 
-// autoCopyMouseSelection publishes a completed editable mouse selection once
-// and only exposes the confirmation toast after OSC 52 succeeds.
+// autoCopyMouseSelection publishes a completed editable mouse selection once.
 func (a *App) autoCopyMouseSelection() {
 	tab := a.activeTabPtr()
 	if tab == nil || tab.IsReadOnly() || !tab.HasSelection() {
 		return
 	}
-	a.copyToastUntil = time.Time{}
-	if a.copySelection() {
-		until := time.Now().Add(statusFlashFor)
-		a.copyToastUntil = until
-		a.scheduleCopyToastExpiry(until)
-	}
-}
-
-// scheduleCopyToastExpiry posts one wake-up event at until so an idle editor
-// redraws after the toast expires instead of waiting for unrelated input.
-func (a *App) scheduleCopyToastExpiry(until time.Time) {
-	if until.IsZero() || a.screen == nil {
-		return
-	}
-	scr := a.screen
-	go func() {
-		timer := time.NewTimer(time.Until(until))
-		defer timer.Stop()
-		<-timer.C
-		scr.PostEventWait(&copyToastExpiredEvent{when: time.Now(), until: until})
-	}()
-}
-
-// handleCopyToastExpiry clears only the toast instance whose timer fired.
-// A later successful copy has a different deadline and must remain visible.
-func (a *App) handleCopyToastExpiry(e *copyToastExpiredEvent) {
-	if e != nil && e.until.Equal(a.copyToastUntil) {
-		a.copyToastUntil = time.Time{}
-	}
+	a.copySelection()
 }
 
 // cutSelection copies the selection then deletes it.
@@ -2632,7 +2567,7 @@ func (a *App) cutSelection() {
 // to come in through the user's terminal paste (Cmd-V / right-click paste).
 func (a *App) pasteClipboard() {
 	tab := a.activeTabPtr()
-	if tab == nil {
+	if tab == nil || tab.IsReadOnly() {
 		return
 	}
 	if a.clipBuf == "" {
@@ -2755,6 +2690,18 @@ func (a *App) hasFileTab() bool {
 func (a *App) hasSelection() bool {
 	t := a.activeTabPtr()
 	return t != nil && t.HasSelection()
+}
+
+// hasEditableTextTab reports whether the active tab accepts text editing.
+func (a *App) hasEditableTextTab() bool {
+	tab := a.activeTabPtr()
+	return tab != nil && !tab.IsReadOnly()
+}
+
+// hasPasteTarget reports whether the internal clipboard can be inserted into
+// the active editable text tab.
+func (a *App) hasPasteTarget() bool {
+	return a.hasEditableTextTab() && a.hasClipboard()
 }
 
 // hasCommentableTab reports whether the active tab is editable text with a
@@ -2971,6 +2918,16 @@ func (a *App) menuPaste() {
 	a.pasteClipboard()
 }
 
+// menuSelectAll selects the full active editable text buffer.
+func (a *App) menuSelectAll() {
+	a.closeMenu()
+	tab := a.activeTabPtr()
+	if tab == nil || tab.IsReadOnly() {
+		return
+	}
+	tab.SelectAll()
+}
+
 // menuToggleLineComment comments or uncomments the active line selection.
 func (a *App) menuToggleLineComment() {
 	a.closeMenu()
@@ -3152,7 +3109,6 @@ func (a *App) draw() {
 		a.drawFindBar()
 	}
 	a.drawStatusBar()
-	a.drawCopyToast()
 
 	// Modal layering, bottom-up. Only one of these is open at a time
 	// (closeAllModals enforces it), but the order still matters so a
@@ -3407,41 +3363,6 @@ func (a *App) drawStatusBar() {
 		leftMax = 0
 	}
 	drawStatusText(a.screen, sx, sy, leftMax, left, style)
-}
-
-// drawCopyToast paints the short success overlay for a mouse-driven copy.
-func (a *App) drawCopyToast() {
-	if !time.Now().Before(a.copyToastUntil) {
-		return
-	}
-	tx, ty, tw, th, ok := a.copyToastRect()
-	if !ok {
-		return
-	}
-	borderStyle := tcell.StyleDefault.Background(a.theme.SidebarBG).Foreground(a.theme.GitAdded)
-	fillRect(a.screen, tx, ty, tw, th, borderStyle)
-	a.screen.SetContent(tx, ty, '┌', nil, borderStyle)
-	a.screen.SetContent(tx+tw-1, ty, '┐', nil, borderStyle)
-	a.screen.SetContent(tx, ty+th-1, '└', nil, borderStyle)
-	a.screen.SetContent(tx+tw-1, ty+th-1, '┘', nil, borderStyle)
-	for cx := tx + 1; cx < tx+tw-1; cx++ {
-		a.screen.SetContent(cx, ty, '─', nil, borderStyle)
-		a.screen.SetContent(cx, ty+th-1, '─', nil, borderStyle)
-	}
-	for cy := ty + 1; cy < ty+th-1; cy++ {
-		a.screen.SetContent(tx, cy, '│', nil, borderStyle)
-		a.screen.SetContent(tx+tw-1, cy, '│', nil, borderStyle)
-	}
-	contentX := tx + 2
-	contentW := tw - 4
-	if contentW < 1 {
-		return
-	}
-	a.screen.SetContent(contentX, ty+1, '●', nil, borderStyle)
-	if contentW > 2 {
-		messageStyle := tcell.StyleDefault.Background(a.theme.SidebarBG).Foreground(a.theme.Text)
-		drawAtWidth(a.screen, contentX+2, ty+1, contentW-2, copyToastMessage, messageStyle)
-	}
 }
 
 // drawTooSmall paints a centred error message when the terminal window is

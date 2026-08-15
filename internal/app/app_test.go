@@ -419,13 +419,13 @@ func TestHasTab_Predicates(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	a := newTestApp(t, dir)
-	if a.hasTab() || a.hasSavableTab() || a.hasSelection() || a.hasClipboard() || a.hasCommentableTab() {
-		t.Fatal("fresh app should have no tab/selection/clipboard/comment action")
+	if a.hasTab() || a.hasSavableTab() || a.hasSelection() || a.hasClipboard() || a.hasEditableTextTab() || a.hasPasteTarget() || a.hasCommentableTab() {
+		t.Fatal("fresh app should have no tab/selection/clipboard/editable/paste/comment action")
 	}
 
 	a.openFile(target)
-	if !a.hasTab() || !a.hasSavableTab() {
-		t.Fatal("expected hasTab && hasSavableTab after open")
+	if !a.hasTab() || !a.hasSavableTab() || !a.hasEditableTextTab() {
+		t.Fatal("expected active editable tab after open")
 	}
 	if a.hasSelection() {
 		t.Fatal("no selection on a fresh tab")
@@ -443,8 +443,17 @@ func TestHasTab_Predicates(t *testing.T) {
 	}
 
 	a.clipBuf = "x"
-	if !a.hasClipboard() {
-		t.Fatal("expected hasClipboard once clipBuf set")
+	if !a.hasClipboard() || !a.hasPasteTarget() {
+		t.Fatal("expected clipboard and paste target once clipBuf set")
+	}
+
+	blocked := filepath.Join(dir, "blocked.pdf")
+	if err := os.WriteFile(blocked, []byte("%PDF-1.7\n"), 0o644); err != nil {
+		t.Fatalf("seed external file: %v", err)
+	}
+	a.openFile(blocked)
+	if a.hasEditableTextTab() || a.hasPasteTarget() {
+		t.Fatal("read-only external tab should not be editable or pasteable")
 	}
 }
 
@@ -843,6 +852,76 @@ func TestCopyCutPaste(t *testing.T) {
 	// Paste with content.
 	a.clipBuf = "X"
 	a.pasteClipboard()
+}
+
+// TestMenuSelectAll_SelectsEditableTextWithoutCopy verifies Select All only
+// selects the editable buffer and leaves both clipboard channels untouched.
+func TestMenuSelectAll_SelectsEditableTextWithoutCopy(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "all.txt")
+	if err := os.WriteFile(path, []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(path)
+	a.clipBuf = "keep"
+	copied := recordingClipboard(a, nil)
+	a.openMenu()
+
+	a.menuSelectAll()
+
+	tab := a.activeTabPtr()
+	if a.menuOpen {
+		t.Fatal("Select all should close menu")
+	}
+	if got, want := tab.SelectionText(), "one\ntwo\n"; got != want {
+		t.Fatalf("selection = %q, want %q", got, want)
+	}
+	if a.clipBuf != "keep" {
+		t.Fatalf("clipBuf = %q, want existing value", a.clipBuf)
+	}
+	if len(*copied) != 0 {
+		t.Fatalf("Select all wrote clipboard %#v", *copied)
+	}
+}
+
+// TestMenuSelectAll_InertWithoutEditableText ensures direct action invocation
+// is safe even when the menu row would be disabled.
+func TestMenuSelectAll_InertWithoutEditableText(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		open func(t *testing.T, a *App)
+	}{
+		{
+			name: "no tab",
+			open: func(_ *testing.T, _ *App) {},
+		},
+		{
+			name: "external pdf",
+			open: func(t *testing.T, a *App) {
+				path := filepath.Join(a.rootDir, "blocked.pdf")
+				if err := os.WriteFile(path, []byte("%PDF-1.7\n"), 0o644); err != nil {
+					t.Fatalf("seed: %v", err)
+				}
+				a.openFile(path)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTestApp(t, t.TempDir())
+			copied := recordingClipboard(a, nil)
+			tc.open(t, a)
+
+			a.menuSelectAll()
+
+			if len(*copied) != 0 {
+				t.Fatalf("Select all wrote clipboard %#v", *copied)
+			}
+			if tab := a.activeTabPtr(); tab != nil && tab.HasSelection() {
+				t.Fatal("Select all should not select external tab")
+			}
+		})
+	}
 }
 
 // TestPasteClipboard_NoTab is safe with no tab open.
@@ -1628,7 +1707,7 @@ func TestHandleMouse_LeftPressInEditor(t *testing.T) {
 }
 
 // TestHandleMouse_AutoCopiesDragSelection publishes a completed editor drag
-// once, retaining the text internally and displaying its confirmation toast.
+// once, retaining the text internally and flashing its confirmation status.
 func TestHandleMouse_AutoCopiesDragSelection(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "f.txt")
@@ -1649,9 +1728,6 @@ func TestHandleMouse_AutoCopiesDragSelection(t *testing.T) {
 	}
 	if a.clipBuf != (*copied)[0] {
 		t.Fatalf("clipBuf = %q, want %q", a.clipBuf, (*copied)[0])
-	}
-	if !time.Now().Before(a.copyToastUntil) {
-		t.Fatal("expected copy toast after successful drag copy")
 	}
 	if a.dragMode != "" {
 		t.Fatalf("dragMode = %q, want cleared", a.dragMode)
@@ -1691,13 +1767,10 @@ func TestHandleMouse_AutoCopiesDoubleClickSelection(t *testing.T) {
 	if got := *copied; len(got) != 1 || got[0] != "hello" {
 		t.Fatalf("double-click copy = %#v, want []string{\"hello\"}", got)
 	}
-	if !time.Now().Before(a.copyToastUntil) {
-		t.Fatal("expected copy toast after successful double-click copy")
-	}
 }
 
 // TestHandleMouse_AutoCopyGuards keeps non-selection and non-editor gestures
-// from changing either clipboard or copy-toast state.
+// from changing clipboard state.
 func TestHandleMouse_AutoCopyGuards(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -1757,15 +1830,12 @@ func TestHandleMouse_AutoCopyGuards(t *testing.T) {
 			if a.clipBuf != "" {
 				t.Fatalf("clipBuf = %q, want empty", a.clipBuf)
 			}
-			if !a.copyToastUntil.IsZero() {
-				t.Fatalf("copyToastUntil = %v, want zero", a.copyToastUntil)
-			}
 		})
 	}
 }
 
 // TestHandleMouse_AutoCopyWriteFailure retains the internal selection when
-// OSC 52 fails but does not expose a success-only toast.
+// OSC 52 fails while retaining the internal selection.
 func TestHandleMouse_AutoCopyWriteFailure(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "f.txt")
@@ -1786,17 +1856,14 @@ func TestHandleMouse_AutoCopyWriteFailure(t *testing.T) {
 	if a.clipBuf == "" {
 		t.Fatal("failed system copy should retain internal clipboard")
 	}
-	if !a.copyToastUntil.IsZero() {
-		t.Fatalf("copyToastUntil = %v, want zero", a.copyToastUntil)
-	}
 	if a.statusMsg != "Copied (system clipboard unavailable)" {
 		t.Fatalf("statusMsg = %q", a.statusMsg)
 	}
 }
 
-// TestHandleMouse_AutoCopyFailureClearsPriorToast ensures a failed later
-// gesture cannot leave stale success feedback from an earlier copy visible.
-func TestHandleMouse_AutoCopyFailureClearsPriorToast(t *testing.T) {
+// TestHandleMouse_AutoCopyFailureFlashesUnavailable ensures a failed later
+// gesture reports the clipboard failure after an earlier successful copy.
+func TestHandleMouse_AutoCopyFailureFlashesUnavailable(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "f.txt")
 	if err := os.WriteFile(target, []byte("abcdef\n"), 0o644); err != nil {
@@ -1818,16 +1885,10 @@ func TestHandleMouse_AutoCopyFailureClearsPriorToast(t *testing.T) {
 	}
 
 	drag()
-	if !time.Now().Before(a.copyToastUntil) {
-		t.Fatal("successful copy should show a toast")
-	}
 	copyErr = errors.New("tty unavailable")
 	drag()
 	if got := len(copied); got != 2 {
 		t.Fatalf("clipboard writes = %d, want 2", got)
-	}
-	if !a.copyToastUntil.IsZero() {
-		t.Fatalf("copyToastUntil = %v, want zero after failure", a.copyToastUntil)
 	}
 	if a.statusMsg != "Copied (system clipboard unavailable)" {
 		t.Fatalf("statusMsg = %q", a.statusMsg)
@@ -1861,9 +1922,6 @@ func TestHandleMouse_EmptyRowDoesNotPublishKeyboardSelection(t *testing.T) {
 	if a.clipBuf != "" {
 		t.Fatalf("clipBuf = %q, want empty", a.clipBuf)
 	}
-	if !a.copyToastUntil.IsZero() {
-		t.Fatalf("copyToastUntil = %v, want zero", a.copyToastUntil)
-	}
 }
 
 // TestHandleMouse_GutterDoesNotPublishKeyboardSelection keeps ordinary
@@ -1895,9 +1953,6 @@ func TestHandleMouse_GutterDoesNotPublishKeyboardSelection(t *testing.T) {
 	}
 	if a.clipBuf != "" {
 		t.Fatalf("clipBuf = %q, want empty", a.clipBuf)
-	}
-	if !a.copyToastUntil.IsZero() {
-		t.Fatalf("copyToastUntil = %v, want zero", a.copyToastUntil)
 	}
 }
 
@@ -1993,119 +2048,6 @@ func TestDraw_AllPanels(t *testing.T) {
 	a.draw()
 }
 
-// TestDrawCopyToast_RenderingAndExpiry verifies successful mouse-copy
-// feedback stays inside the editor, uses the success colour, and disappears
-// after its deadline without disturbing narrow layouts.
-func TestDrawCopyToast_RenderingAndExpiry(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	scr := a.screen.(tcell.SimulationScreen)
-	a.copyToastUntil = time.Now().Add(time.Second)
-	a.draw()
-	scr.Show()
-
-	tx, ty, tw, th, ok := a.copyToastRect()
-	if !ok {
-		t.Fatal("expected toast rectangle")
-	}
-	ex, ey, ew, eh := a.editorRect()
-	if tx < ex || ty < ey || tx+tw > ex+ew || ty+th > ey+eh {
-		t.Fatalf("toast rect (%d,%d,%d,%d) outside editor (%d,%d,%d,%d)", tx, ty, tw, th, ex, ey, ew, eh)
-	}
-	border, borderStyle, _ := scr.Get(tx, ty)
-	if border != "┌" {
-		t.Fatalf("toast corner = %q, want ┌", border)
-	}
-	fg, _, _ := borderStyle.Decompose()
-	if fg != a.theme.GitAdded {
-		t.Fatalf("toast border foreground = %v, want %v", fg, a.theme.GitAdded)
-	}
-	if line := screenLine(scr, ty+1); !strings.Contains(line, "Copied to clipboard") {
-		t.Fatalf("toast line = %q", line)
-	}
-
-	a.copyToastUntil = time.Now().Add(-time.Second)
-	a.draw()
-	scr.Show()
-	border, _, _ = scr.Get(tx, ty)
-	if border == "┌" {
-		t.Fatal("expired toast remained visible")
-	}
-
-	a.width = minWidth
-	a.height = 40
-	a.sidebarShown = true
-	scr.SetSize(a.width, a.height)
-	if nx, ny, nw, nh, visible := a.copyToastRect(); visible && (nx < a.sidebarW() || ny < 1 || nx+nw > a.width || ny+nh > a.height-1) {
-		t.Fatalf("narrow toast rect (%d,%d,%d,%d) outside editor", nx, ny, nw, nh)
-	}
-}
-
-// TestRun_CopyToastExpiryRedrawsWithoutInput verifies the expiry event wakes
-// an otherwise idle event loop and removes the visible toast in its next frame.
-func TestRun_CopyToastExpiryRedrawsWithoutInput(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	scr := a.screen.(tcell.SimulationScreen)
-	a.copyToastUntil = time.Now().Add(time.Hour)
-	deadline := a.copyToastUntil
-
-	frames := 0
-	var firstFrameToast, expiryFrameToast bool
-	a.showFrame = func() {
-		scr.Show()
-		frames++
-		tx, ty, _, _, ok := a.copyToastRect()
-		if !ok {
-			t.Fatal("expected toast rectangle")
-		}
-		corner, _, _ := scr.Get(tx, ty)
-		switch frames {
-		case 1:
-			firstFrameToast = corner == "┌"
-		case 2:
-			expiryFrameToast = corner == "┌"
-			a.quit = true
-		}
-	}
-
-	if err := a.screen.PostEvent(&copyToastExpiredEvent{when: time.Now(), until: deadline}); err != nil {
-		t.Fatalf("post toast expiry: %v", err)
-	}
-	if err := a.Run(); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if frames != 2 {
-		t.Fatalf("frames = %d, want 2", frames)
-	}
-	if !firstFrameToast {
-		t.Fatal("toast was not visible before the expiry event")
-	}
-	if expiryFrameToast {
-		t.Fatal("toast remained visible after expiry event")
-	}
-	if !a.copyToastUntil.IsZero() {
-		t.Fatalf("copyToastUntil = %v, want zero", a.copyToastUntil)
-	}
-}
-
-// TestHandleCopyToastExpiry_IgnoresStaleDeadline ensures a pending timer from
-// an earlier successful copy cannot clear or shorten a refreshed toast.
-func TestHandleCopyToastExpiry_IgnoresStaleDeadline(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	earlier := time.Now().Add(time.Second)
-	refreshed := earlier.Add(time.Second)
-	a.copyToastUntil = refreshed
-
-	a.handleCopyToastExpiry(&copyToastExpiredEvent{when: time.Now(), until: earlier})
-	if !a.copyToastUntil.Equal(refreshed) {
-		t.Fatalf("stale expiry changed deadline to %v, want %v", a.copyToastUntil, refreshed)
-	}
-
-	a.handleCopyToastExpiry(&copyToastExpiredEvent{when: time.Now(), until: refreshed})
-	if !a.copyToastUntil.IsZero() {
-		t.Fatalf("matching expiry left deadline = %v, want zero", a.copyToastUntil)
-	}
-}
-
 // TestTabBarClick_ClosesViaX clicks the × in a tab and verifies the close
 // path runs (clean tab → tab removed).
 func TestTabBarClick_ClosesViaX(t *testing.T) {
@@ -2180,13 +2122,13 @@ func TestMenuLayout_NoCustomActions(t *testing.T) {
 	a.customActions = nil
 	items, dividers, h := a.menuLayout()
 
-	if h != 36 {
-		t.Errorf("modalHeight = %d, want 36", h)
+	if h != 37 {
+		t.Errorf("modalHeight = %d, want 37", h)
 	}
-	if got := len(items); got != 26 {
-		t.Errorf("item count = %d, want 26 built-ins", got)
+	if got := len(items); got != 27 {
+		t.Errorf("item count = %d, want 27 built-ins", got)
 	}
-	wantDiv := []int{2, 8, 12, 15, 25, 30, 33}
+	wantDiv := []int{2, 8, 12, 15, 25, 31, 34}
 	if len(dividers) != len(wantDiv) {
 		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
 	}
@@ -2239,9 +2181,10 @@ func TestMenuLayout_Shortcuts(t *testing.T) {
 		"Delete file":          "",
 		"Copy relative path":   "",
 		"Copy absolute path":   "",
-		"Copy selection":       "",
-		"Cut selection":        "",
-		"Paste":                "",
+		"Copy selection":       "Esc c",
+		"Cut selection":        "Esc x",
+		"Paste":                "Esc v",
+		"Select all":           "Esc a",
 		"Toggle line comment":  "Esc /",
 		"Enable soft wrap":     "Esc z",
 		"Hide file explorer":   "Esc t",
@@ -2372,8 +2315,8 @@ func TestMenuLayout_WithCustomActions(t *testing.T) {
 	}
 	items, _, h := a.menuLayout()
 
-	if h != 39 { // 36 + 2 items + 1 divider
-		t.Errorf("modalHeight = %d, want 39", h)
+	if h != 40 { // 37 + 2 items + 1 divider
+		t.Errorf("modalHeight = %d, want 40", h)
 	}
 	// Custom actions should be the second-to-last and third-to-last
 	// rows, with Quit as the final row.

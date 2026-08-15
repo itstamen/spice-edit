@@ -31,13 +31,15 @@ type leaderBinding struct {
 // familiar editor gestures where they make sense.
 //
 // Intentionally not bound:
-//   - c / x / v (clipboard) — the host terminal's Cmd+C/V already covers
-//     that path; adding a third channel just adds confusion.
 //   - rename / delete / revert — destructive enough that we want the
 //     menu's confirm dialog to gate the action as a deliberate gesture.
 func leaderBindings() []leaderBinding {
 	return []leaderBinding{
 		{'s', (*App).menuSave},
+		{'c', (*App).menuCopy},
+		{'x', (*App).menuCut},
+		{'v', (*App).menuPaste},
+		{'a', (*App).menuSelectAll},
 		{'u', (*App).menuUndo},
 		{'r', (*App).menuRedo},
 		{'w', (*App).menuClose},
