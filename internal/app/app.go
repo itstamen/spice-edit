@@ -1696,8 +1696,9 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		case y == 0:
 			a.tabBarClick(x, y)
 		case y > 0 && y < a.height-1:
-			a.editorPress(x, y)
-			a.dragMode = "editor"
+			if a.editorPress(x, y) {
+				a.dragMode = "editor"
+			}
 		}
 		return
 	}
@@ -1912,30 +1913,31 @@ func (a *App) syncActiveTreeFile() {
 }
 
 // editorPress handles the initial mouse press inside the editor — placing
-// the caret, optionally selecting a word on double-click. Image tabs
-// have no caret, so the press is dropped.
-func (a *App) editorPress(x, y int) {
+// the caret, optionally selecting a word on double-click. It reports whether
+// the press landed on editable text so callers can start a drag only then.
+func (a *App) editorPress(x, y int) bool {
 	tab := a.activeTabPtr()
 	if tab == nil || tab.IsReadOnly() {
-		return
+		return false
 	}
 	ex, ey, ew, eh := a.editorRect()
 	if a.openGitHunkAt(tab, x-ex, y-ey, ew, eh) {
-		return
+		return false
 	}
 	pos, ok := a.editorHitTest(tab, x-ex, y-ey, ew, eh)
 	if !ok {
-		return
+		return false
 	}
 
 	now := time.Now()
 	if a.lastClick.x == x && a.lastClick.y == y && now.Sub(a.lastClick.when) < doubleClickMs {
 		a.selectWordAt(tab, pos)
 		a.lastClick = clickRecord{} // prevent triple-click from selecting nothing.
-		return
+		return true
 	}
 	a.lastClick = clickRecord{x: x, y: y, when: now}
 	tab.MoveCursorTo(pos, false)
+	return true
 }
 
 // openGitHunkAt opens a diff preview when the user clicks a gutter marker.
@@ -2557,6 +2559,7 @@ func (a *App) autoCopyMouseSelection() {
 	if tab == nil || tab.IsReadOnly() || !tab.HasSelection() {
 		return
 	}
+	a.copyToastUntil = time.Time{}
 	if a.copySelection() {
 		a.copyToastUntil = time.Now().Add(statusFlashFor)
 	}

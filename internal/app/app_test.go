@@ -1613,7 +1613,8 @@ func TestHandleMouse_LeftPressInEditor(t *testing.T) {
 	}
 	a := newTestApp(t, dir)
 	a.openFile(target)
-	ev := tcell.NewEventMouse(60, 5, tcell.Button1, tcell.ModNone)
+	ex, ey, _, _ := a.editorRect()
+	ev := tcell.NewEventMouse(ex+8, ey, tcell.Button1, tcell.ModNone)
 	a.handleMouse(ev)
 	if a.dragMode != "editor" {
 		t.Fatalf("expected dragMode=editor, got %q", a.dragMode)
@@ -1790,6 +1791,78 @@ func TestHandleMouse_AutoCopyWriteFailure(t *testing.T) {
 	}
 	if a.statusMsg != "Copied (system clipboard unavailable)" {
 		t.Fatalf("statusMsg = %q", a.statusMsg)
+	}
+}
+
+// TestHandleMouse_AutoCopyFailureClearsPriorToast ensures a failed later
+// gesture cannot leave stale success feedback from an earlier copy visible.
+func TestHandleMouse_AutoCopyFailureClearsPriorToast(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(target, []byte("abcdef\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	var copied []string
+	var copyErr error
+	a.copyToSystem = func(text string) error {
+		copied = append(copied, text)
+		return copyErr
+	}
+	ex, ey, _, _ := a.editorRect()
+	drag := func() {
+		a.handleMouse(tcell.NewEventMouse(ex+8, ey, tcell.Button1, tcell.ModNone))
+		a.handleMouse(tcell.NewEventMouse(ex+12, ey, tcell.Button1, tcell.ModNone))
+		a.handleMouse(tcell.NewEventMouse(ex+12, ey, tcell.ButtonNone, tcell.ModNone))
+	}
+
+	drag()
+	if !time.Now().Before(a.copyToastUntil) {
+		t.Fatal("successful copy should show a toast")
+	}
+	copyErr = errors.New("tty unavailable")
+	drag()
+	if got := len(copied); got != 2 {
+		t.Fatalf("clipboard writes = %d, want 2", got)
+	}
+	if !a.copyToastUntil.IsZero() {
+		t.Fatalf("copyToastUntil = %v, want zero after failure", a.copyToastUntil)
+	}
+	if a.statusMsg != "Copied (system clipboard unavailable)" {
+		t.Fatalf("statusMsg = %q", a.statusMsg)
+	}
+}
+
+// TestHandleMouse_EmptyRowDoesNotPublishKeyboardSelection keeps a release
+// after a non-editable body press from publishing an existing selection.
+func TestHandleMouse_EmptyRowDoesNotPublishKeyboardSelection(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(target, []byte("abcdef\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	tab := a.activeTabPtr()
+	tab.Anchor = editor.Position{Line: 0, Col: 0}
+	tab.Cursor = editor.Position{Line: 0, Col: 6}
+	a.copyToSystem = func(string) error {
+		t.Fatal("unexpected system clipboard write")
+		return nil
+	}
+	ex, ey, _, _ := a.editorRect()
+	a.handleMouse(tcell.NewEventMouse(ex+8, ey+1, tcell.Button1, tcell.ModNone))
+	a.handleMouse(tcell.NewEventMouse(ex+8, ey+1, tcell.ButtonNone, tcell.ModNone))
+
+	if a.dragMode != "" {
+		t.Fatalf("dragMode = %q, want empty", a.dragMode)
+	}
+	if a.clipBuf != "" {
+		t.Fatalf("clipBuf = %q, want empty", a.clipBuf)
+	}
+	if !a.copyToastUntil.IsZero() {
+		t.Fatalf("copyToastUntil = %v, want zero", a.copyToastUntil)
 	}
 }
 
