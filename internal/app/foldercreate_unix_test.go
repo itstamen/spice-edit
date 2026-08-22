@@ -10,6 +10,7 @@
 package app
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,46 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+// TestUnixDirectoryOwnershipClosesCurrentDescriptor reuses the original file
+// descriptor number after replacement. Deferred cleanup must close the final
+// owned descriptor without closing the unrelated resource using the old ID.
+func TestUnixDirectoryOwnershipClosesCurrentDescriptor(t *testing.T) {
+	root := realTempDir(t)
+	first, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatalf("open first descriptor: %v", err)
+	}
+	second, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		unix.Close(first)
+		t.Fatalf("open second descriptor: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = unix.Close(first)
+		_ = unix.Close(second)
+	})
+
+	owned := first
+	func() {
+		defer closeUnixDirectory(&owned)
+		replaceUnixDirectory(&owned, second)
+		if err := unix.Dup2(second, first); err != nil {
+			t.Fatalf("reuse original descriptor: %v", err)
+		}
+	}()
+
+	var stat unix.Stat_t
+	if err := unix.Fstat(first, &stat); err != nil {
+		t.Fatalf("reused descriptor was closed: %v", err)
+	}
+	if err := unix.Fstat(second, &stat); !errors.Is(err, unix.EBADF) {
+		t.Fatalf("final owned descriptor remains open: %v", err)
+	}
+	if owned != -1 {
+		t.Fatalf("owned descriptor = %d, want released sentinel", owned)
+	}
+}
 
 // realTempDir resolves macOS's /var alias so these tests exercise the folder
 // component under test rather than the operating system's own symlink.
@@ -71,6 +112,36 @@ func TestDoCreateFolder_RejectsSymlinkedParentAncestor(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(outside, "selected", "new")); !os.IsNotExist(err) {
 		t.Fatalf("folder escaped through parent alias: err=%v", err)
+	}
+	if !strings.Contains(a.statusMsg, "symlink") {
+		t.Fatalf("status message = %q, want symlink error", a.statusMsg)
+	}
+}
+
+// TestDoCreateFolder_AllowsSymlinkedProjectRoot treats the startup root as a
+// trusted alias while preserving no-follow traversal for children beneath it.
+func TestDoCreateFolder_AllowsSymlinkedProjectRoot(t *testing.T) {
+	realRoot := realTempDir(t)
+	aliasParent := realTempDir(t)
+	aliasRoot := filepath.Join(aliasParent, "project")
+	if err := os.Symlink(realRoot, aliasRoot); err != nil {
+		t.Fatalf("create project-root symlink: %v", err)
+	}
+	a := newTestApp(t, aliasRoot)
+
+	a.doCreateFolder(aliasRoot, filepath.Join("nested", "new"))
+
+	if info, err := os.Stat(filepath.Join(realRoot, "nested", "new")); err != nil || !info.IsDir() {
+		t.Fatalf("folder through trusted root alias: info=%v err=%v", info, err)
+	}
+
+	outside := realTempDir(t)
+	if err := os.Symlink(outside, filepath.Join(realRoot, "escape")); err != nil {
+		t.Fatalf("create descendant symlink: %v", err)
+	}
+	a.doCreateFolder(aliasRoot, filepath.Join("escape", "blocked"))
+	if _, err := os.Stat(filepath.Join(outside, "blocked")); !os.IsNotExist(err) {
+		t.Fatalf("folder escaped through descendant symlink: err=%v", err)
 	}
 	if !strings.Contains(a.statusMsg, "symlink") {
 		t.Fatalf("status message = %q, want symlink error", a.statusMsg)

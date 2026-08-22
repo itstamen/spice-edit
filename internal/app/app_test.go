@@ -54,6 +54,7 @@ func newTestApp(t *testing.T, root string) *App {
 		showFrame:      scr.Show,
 		theme:          theme.Default(),
 		rootDir:        tree.Root.Path,
+		rootAnchor:     mustResolveTestPath(t, tree.Root.Path),
 		tree:           tree,
 		hoveredMenuRow: -1,
 		sidebarShown:   true,
@@ -62,6 +63,16 @@ func newTestApp(t *testing.T, root string) *App {
 	a.setActiveFolder(tree.Root.Path)
 	a.width, a.height = scr.Size()
 	return a
+}
+
+// mustResolveTestPath returns a canonical existing path for app fixtures.
+func mustResolveTestPath(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("resolve test path: %v", err)
+	}
+	return resolved
 }
 
 // recordingClipboard installs a deterministic system clipboard writer and

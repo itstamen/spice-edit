@@ -436,6 +436,24 @@ func TestTab_DeleteCurrentLines_ReadOnlyNoOp(t *testing.T) {
 	}
 }
 
+// TestTab_DeleteCurrentLines_OnlyEmptyLineNoOp avoids dirtying a new buffer or
+// recording an undo entry when deletion cannot change its required last line.
+func TestTab_DeleteCurrentLines_OnlyEmptyLineNoOp(t *testing.T) {
+	tab := &Tab{Buffer: NewBuffer("")}
+
+	tab.DeleteCurrentLines()
+
+	if got := tab.Buffer.String(); got != "" {
+		t.Fatalf("buffer changed: %q", got)
+	}
+	if tab.Dirty || tab.cursorMoved || tab.StyleStale {
+		t.Fatalf("empty-line delete changed state: dirty=%v moved=%v stale=%v", tab.Dirty, tab.cursorMoved, tab.StyleStale)
+	}
+	if got := len(tab.undoStack); got != 0 {
+		t.Fatalf("undo entries = %d, want 0", got)
+	}
+}
+
 // TestTab_InsertString_ReplacesSelection inserts text after first deleting
 // any active selection.
 func TestTab_InsertString_ReplacesSelection(t *testing.T) {

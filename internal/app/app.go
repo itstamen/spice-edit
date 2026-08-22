@@ -364,10 +364,14 @@ type App struct {
 	graphicsUsesTTY      bool
 	graphicsTTY          tcell.Tty
 
-	rootDir   string
-	tree      *filetree.Tree
-	tabs      []*editor.Tab
-	activeTab int
+	rootDir string
+	// rootAnchor is the canonical project root used as the trusted starting
+	// point for descriptor-relative folder creation. Descendants are still
+	// traversed without following symlinks.
+	rootAnchor string
+	tree       *filetree.Tree
+	tabs       []*editor.Tab
+	activeTab  int
 
 	// activeFolder is the directory the editor is currently "working
 	// in" — the default target for New File from the main menu. It
@@ -557,12 +561,18 @@ func New(rootDir string) (*App, error) {
 		scr.Fini()
 		return nil, err
 	}
+	rootAnchor, err := filepath.EvalSymlinks(tree.Root.Path)
+	if err != nil {
+		scr.Fini()
+		return nil, err
+	}
 
 	a := &App{
 		screen:         scr,
 		copyToSystem:   clipboard.CopyToSystem,
 		theme:          th,
 		rootDir:        rootDir,
+		rootAnchor:     rootAnchor,
 		tree:           tree,
 		hoveredMenuRow: -1,
 		sidebarShown:   true,
@@ -620,12 +630,18 @@ func NewSingleFile(filePath string) (*App, error) {
 	if rootDir == "" {
 		rootDir = "."
 	}
+	rootAnchor, err := filepath.EvalSymlinks(rootDir)
+	if err != nil {
+		scr.Fini()
+		return nil, err
+	}
 
 	a := &App{
 		screen:         scr,
 		copyToSystem:   clipboard.CopyToSystem,
 		theme:          th,
 		rootDir:        rootDir,
+		rootAnchor:     rootAnchor,
 		tree:           nil,
 		hoveredMenuRow: -1,
 		sidebarShown:   false,
@@ -1582,13 +1598,13 @@ func (a *App) appendPastedKey(ev *tcell.EventKey) {
 	}
 }
 
-// finishPaste ends bracketed paste capture before inserting the entire
-// payload, making the terminal paste a single structural undo operation.
+// finishPaste ends bracketed paste capture before routing the entire payload
+// to the focused text input or editor as one inert text operation.
 func (a *App) finishPaste() {
 	text := a.pasteBuf.String()
 	a.pasting = false
 	a.pasteBuf.Reset()
-	a.insertPastedText(text)
+	a.routePastedText(text)
 }
 
 // -----------------------------------------------------------------------------
@@ -2629,6 +2645,74 @@ func (a *App) pasteClipboard() {
 // Buffer.InsertString receives the same text regardless of paste origin.
 func normalizePastedText(text string) string {
 	return strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(text)
+}
+
+// normalizeSingleLinePaste converts every pasted line break to a space so a
+// terminal paste cannot submit or activate a single-line modal control.
+func normalizeSingleLinePaste(text string) string {
+	return strings.ReplaceAll(normalizePastedText(text), "\n", " ")
+}
+
+// insertPastedRunes inserts text at a rune cursor and returns the updated
+// value and cursor. It is shared by every single-line text input modal.
+func insertPastedRunes(value []rune, cursor int, text string) ([]rune, int) {
+	if text == "" {
+		return value, cursor
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > len(value) {
+		cursor = len(value)
+	}
+	pasted := []rune(text)
+	next := make([]rune, 0, len(value)+len(pasted))
+	next = append(next, value[:cursor]...)
+	next = append(next, pasted...)
+	next = append(next, value[cursor:]...)
+	return next, cursor + len(pasted)
+}
+
+// routePastedText sends bracketed paste to the active single-line text state.
+// Non-text overlays absorb the payload so the background editor cannot change.
+func (a *App) routePastedText(text string) {
+	if a.promptOpen {
+		text = normalizeSingleLinePaste(text)
+		a.promptValue, a.promptCursor = insertPastedRunes(a.promptValue, a.promptCursor, text)
+		return
+	}
+	if a.confirmOpen || a.dirtyOpen {
+		return
+	}
+	if a.formOpen {
+		if a.formFocus >= 0 && a.formFocus < len(a.formPrompts) && a.formPrompts[a.formFocus].Type == customactions.PromptText {
+			text = normalizeSingleLinePaste(text)
+			i := a.formFocus
+			a.formText[i], a.formCursor[i] = insertPastedRunes(a.formText[i], a.formCursor[i], text)
+			a.formValues[a.formPrompts[i].Key] = string(a.formText[i])
+		}
+		return
+	}
+	if a.contextOpen {
+		return
+	}
+	if a.findOpen {
+		text = normalizeSingleLinePaste(text)
+		a.findValue, a.findCursor = insertPastedRunes(a.findValue, a.findCursor, text)
+		a.findApplyQuery()
+		return
+	}
+	if a.finderOpen {
+		text = normalizeSingleLinePaste(text)
+		a.finderQuery, a.finderCursor = insertPastedRunes(a.finderQuery, a.finderCursor, text)
+		a.finderSelected = 0
+		a.refreshFinderResults()
+		return
+	}
+	if a.menuOpen {
+		return
+	}
+	a.insertPastedText(text)
 }
 
 // insertPastedText normalizes text and inserts it as one structural editor

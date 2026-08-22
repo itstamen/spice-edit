@@ -37,7 +37,7 @@ func createFolderAt(parent, name string) error {
 	if err != nil {
 		return err
 	}
-	defer unix.Close(fd)
+	defer closeUnixDirectory(&fd)
 
 	components := strings.Split(name, string(filepath.Separator))
 	for i, component := range components {
@@ -49,8 +49,7 @@ func createFolderAt(parent, name string) error {
 					unix.Close(next)
 					return fmt.Errorf("a folder named %q already exists", filepath.Base(name))
 				}
-				unix.Close(fd)
-				fd = next
+				replaceUnixDirectory(&fd, next)
 				break
 			}
 			if !errors.Is(openErr, unix.ENOENT) {
@@ -68,6 +67,21 @@ func createFolderAt(parent, name string) error {
 		}
 	}
 	return nil
+}
+
+// closeUnixDirectory closes the currently owned descriptor at most once.
+func closeUnixDirectory(fd *int) {
+	if *fd < 0 {
+		return
+	}
+	_ = unix.Close(*fd)
+	*fd = -1
+}
+
+// replaceUnixDirectory transfers ownership after closing the prior descriptor.
+func replaceUnixDirectory(fd *int, next int) {
+	closeUnixDirectory(fd)
+	*fd = next
 }
 
 // openUnixDirectoryAnchor resolves an absolute directory from the trusted

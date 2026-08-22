@@ -15,6 +15,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/cloudmanic/spice-edit/internal/customactions"
 	"github.com/cloudmanic/spice-edit/internal/editor"
 )
 
@@ -197,6 +198,126 @@ func TestHandleEvent_BracketedPaste(t *testing.T) {
 	}
 	if got := tab.Buffer.String(); got != "" {
 		t.Fatalf("undo buffer = %q, want initial state", got)
+	}
+}
+
+// pasteEventText drives a complete bracketed-paste lifecycle through the app
+// event router, including command keys that must remain inert as pasted data.
+func pasteEventText(a *App, prefix, suffix string) {
+	a.handleEvent(tcell.NewEventPaste(true))
+	for _, r := range prefix {
+		a.handleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
+	}
+	a.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyEsc, 0, tcell.ModNone))
+	for _, r := range suffix {
+		a.handleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
+	}
+	a.handleEvent(tcell.NewEventPaste(false))
+}
+
+// TestHandleEvent_BracketedPasteTargetsTextInputs proves paste completion is
+// routed to the focused single-line UI state without editing the background
+// buffer or treating pasted newline/Esc keys as modal commands.
+func TestHandleEvent_BracketedPasteTargetsTextInputs(t *testing.T) {
+	tests := []struct {
+		name  string
+		open  func(*App)
+		value func(*App) string
+	}{
+		{
+			name: "prompt",
+			open: func(a *App) {
+				a.openPrompt("Name", "", "pre", nil)
+			},
+			value: func(a *App) string { return string(a.promptValue) },
+		},
+		{
+			name: "find",
+			open: func(a *App) {
+				a.openFind()
+				a.findValue = []rune("pre")
+				a.findCursor = len(a.findValue)
+			},
+			value: func(a *App) string { return string(a.findValue) },
+		},
+		{
+			name: "finder",
+			open: func(a *App) {
+				a.finderOpen = true
+				a.finderQuery = []rune("pre")
+				a.finderCursor = len(a.finderQuery)
+			},
+			value: func(a *App) string { return string(a.finderQuery) },
+		},
+		{
+			name: "form text",
+			open: func(a *App) {
+				a.openForm("Action", []customactions.Prompt{{Key: "NAME", Type: customactions.PromptText, Default: "pre"}}, nil)
+			},
+			value: func(a *App) string { return string(a.formText[0]) },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := newTestApp(t, t.TempDir())
+			tab, err := editor.NewTab("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			tab.Buffer = editor.NewBuffer("background")
+			a.tabs = []*editor.Tab{tab}
+			tt.open(a)
+
+			pasteEventText(a, "alpha", "beta")
+
+			if got := tab.Buffer.String(); got != "background" {
+				t.Fatalf("background buffer = %q", got)
+			}
+			if got := tt.value(a); got != "prealpha beta" {
+				t.Fatalf("input value = %q, want %q", got, "prealpha beta")
+			}
+			if !a.promptOpen && !a.findOpen && !a.finderOpen && !a.formOpen {
+				t.Fatal("pasted command key closed the text input")
+			}
+		})
+	}
+}
+
+// TestHandleEvent_BracketedPasteDiscardsNonTextOverlays keeps paste payloads
+// from leaking through menus, confirmations, and select-only form rows.
+func TestHandleEvent_BracketedPasteDiscardsNonTextOverlays(t *testing.T) {
+	tests := []struct {
+		name string
+		open func(*App)
+	}{
+		{"menu", func(a *App) { a.openMenu() }},
+		{"confirm", func(a *App) { a.openConfirm("Delete", "sure?", nil) }},
+		{"dirty", func(a *App) { a.openDirtyClose("Save", "changed", nil, nil) }},
+		{"context", func(a *App) { a.contextOpen = true }},
+		{"select form", func(a *App) {
+			a.openForm("Action", []customactions.Prompt{{Key: "HOST", Type: customactions.PromptSelect, Options: []string{"one", "two"}}}, nil)
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := newTestApp(t, t.TempDir())
+			tab, err := editor.NewTab("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			tab.Buffer = editor.NewBuffer("background")
+			a.tabs = []*editor.Tab{tab}
+			tt.open(a)
+
+			pasteEventText(a, "alpha", "beta")
+
+			if got := tab.Buffer.String(); got != "background" {
+				t.Fatalf("background buffer = %q", got)
+			}
+		})
 	}
 }
 

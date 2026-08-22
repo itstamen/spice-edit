@@ -188,7 +188,12 @@ func (a *App) doCreateFolder(parent, name string) {
 		a.flash(fmt.Sprintf("Create folder failed: %v", err))
 		return
 	}
-	if err := createFolderAt(parent, filepath.Clean(name)); err != nil {
+	anchoredParent, err := a.folderCreateParent(parent)
+	if err != nil {
+		a.flash(fmt.Sprintf("Create folder failed: %v", err))
+		return
+	}
+	if err := createFolderAt(anchoredParent, filepath.Clean(name)); err != nil {
 		a.flash(fmt.Sprintf("Create folder failed: %v", err))
 		return
 	}
@@ -204,6 +209,34 @@ func (a *App) doCreateFolder(parent, name string) {
 		a.tree.Reveal(target, listH)
 	}
 	a.flash(fmt.Sprintf("Created folder %s", name))
+}
+
+// folderCreateParent maps a tree-visible parent beneath the user's startup
+// root onto the canonical trusted root anchor without resolving descendants.
+func (a *App) folderCreateParent(parent string) (string, error) {
+	root, err := filepath.Abs(a.rootDir)
+	if err != nil {
+		return "", err
+	}
+	parent, err = filepath.Abs(parent)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(root, parent)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("folder path must stay within the project root")
+	}
+	anchor := a.rootAnchor
+	if anchor == "" {
+		anchor, err = filepath.EvalSymlinks(root)
+		if err != nil {
+			return "", err
+		}
+	}
+	return filepath.Join(anchor, rel), nil
 }
 
 // doRenameFile renames oldPath to a sibling whose basename is newName,

@@ -37,7 +37,7 @@ func createFolderAt(parent, name string) error {
 	if err != nil {
 		return err
 	}
-	defer windows.CloseHandle(fd)
+	defer closeWindowsDirectory(&fd)
 
 	components := strings.Split(name, string(filepath.Separator))
 	for i, component := range components {
@@ -48,8 +48,7 @@ func createFolderAt(parent, name string) error {
 					windows.CloseHandle(next)
 					return fmt.Errorf("a folder named %q already exists", filepath.Base(name))
 				}
-				windows.CloseHandle(fd)
-				fd = next
+				replaceWindowsDirectory(&fd, next)
 				break
 			}
 			if !windowsPathMissing(openErr) {
@@ -72,12 +71,26 @@ func createFolderAt(parent, name string) error {
 				windows.CloseHandle(next)
 				return nil
 			}
-			windows.CloseHandle(fd)
-			fd = next
+			replaceWindowsDirectory(&fd, next)
 			break
 		}
 	}
 	return nil
+}
+
+// closeWindowsDirectory closes the currently owned handle at most once.
+func closeWindowsDirectory(fd *windows.Handle) {
+	if *fd == 0 || *fd == windows.InvalidHandle {
+		return
+	}
+	_ = windows.CloseHandle(*fd)
+	*fd = windows.InvalidHandle
+}
+
+// replaceWindowsDirectory transfers ownership after closing the prior handle.
+func replaceWindowsDirectory(fd *windows.Handle, next windows.Handle) {
+	closeWindowsDirectory(fd)
+	*fd = next
 }
 
 // openWindowsDirectoryAnchor resolves an absolute directory from the volume

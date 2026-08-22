@@ -503,6 +503,9 @@ func (t *Tab) DeleteCurrentLines() {
 	if t.IsReadOnly() {
 		return
 	}
+	if t.Buffer.LineCount() == 1 && t.Buffer.Lines[0] == "" {
+		return
+	}
 	cursor := t.Buffer.Clamp(t.Cursor)
 	anchor := t.Buffer.Clamp(t.Anchor)
 	start, end := cursor.Line, cursor.Line
