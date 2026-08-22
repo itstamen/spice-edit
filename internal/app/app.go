@@ -396,17 +396,18 @@ type App struct {
 	// drag the splitter to change it within [minSidebarWidth, width-minEditorAfterDrag].
 	sidebarWidth int
 
-	clipBuf      string
-	copyToSystem func(string) error
-	pasting      bool
-	pasteBuf     strings.Builder
-	statusMsg    string
-	statusUntil  time.Time
-	openPath     pathOpener
-	revealPath   pathRevealer
-	dragMode     string // "editor" while a drag-select is active.
-	lastClick    clickRecord
-	lastTabRects []tabRect
+	clipBuf        string
+	copyToSystem   func(string) error
+	readFromSystem func() (string, error)
+	pasting        bool
+	pasteBuf       strings.Builder
+	statusMsg      string
+	statusUntil    time.Time
+	openPath       pathOpener
+	revealPath     pathRevealer
+	dragMode       string // "editor" while a drag-select is active.
+	lastClick      clickRecord
+	lastTabRects   []tabRect
 
 	// lastShiftAt is the wall-clock time we last saw any mouse event
 	// carrying the Shift modifier. Some terminals (notably Zellij over
@@ -570,6 +571,7 @@ func New(rootDir string) (*App, error) {
 	a := &App{
 		screen:         scr,
 		copyToSystem:   clipboard.CopyToSystem,
+		readFromSystem: clipboard.ReadSystem,
 		theme:          th,
 		rootDir:        rootDir,
 		rootAnchor:     rootAnchor,
@@ -639,6 +641,7 @@ func NewSingleFile(filePath string) (*App, error) {
 	a := &App{
 		screen:         scr,
 		copyToSystem:   clipboard.CopyToSystem,
+		readFromSystem: clipboard.ReadSystem,
 		theme:          th,
 		rootDir:        rootDir,
 		rootAnchor:     rootAnchor,
@@ -1598,12 +1601,22 @@ func (a *App) appendPastedKey(ev *tcell.EventKey) {
 	}
 }
 
-// finishPaste ends bracketed paste capture before routing the entire payload
-// to the focused text input or editor as one inert text operation.
+// finishPaste ends bracketed paste capture before routing the system clipboard
+// to the focused text input or editor. The captured terminal payload remains
+// a fallback for terminals that do not permit system clipboard reads.
 func (a *App) finishPaste() {
-	text := a.pasteBuf.String()
+	captured := a.pasteBuf.String()
 	a.pasting = false
 	a.pasteBuf.Reset()
+
+	readFromSystem := a.readFromSystem
+	if readFromSystem == nil {
+		readFromSystem = clipboard.ReadSystem
+	}
+	text, err := readFromSystem()
+	if err != nil {
+		text = captured
+	}
 	a.routePastedText(text)
 }
 
@@ -2627,18 +2640,23 @@ func (a *App) cutSelection() {
 	tab.DeleteSelection()
 }
 
-// pasteClipboard inserts the editor's internal clipboard at the cursor.
-// We can't read the system clipboard from a TUI, so external pastes have
-// to come in through the user's terminal paste (Cmd-V / right-click paste).
+// pasteClipboard reads the system clipboard and inserts it at the cursor.
+// Explicit paste does not fall back to the editor's internal copy buffer:
+// failure is surfaced to the user so they do not paste stale selection text.
 func (a *App) pasteClipboard() {
-	if tab := a.activeTabPtr(); tab == nil || tab.IsReadOnly() {
+	if !a.hasEditableTextTab() {
 		return
 	}
-	if a.clipBuf == "" {
-		a.flash("Internal clipboard empty — paste from your terminal (Cmd-V)")
+	readFromSystem := a.readFromSystem
+	if readFromSystem == nil {
+		readFromSystem = clipboard.ReadSystem
+	}
+	text, err := readFromSystem()
+	if err != nil {
+		a.flash("System clipboard unavailable")
 		return
 	}
-	a.insertPastedText(a.clipBuf)
+	a.insertPastedText(text)
 }
 
 // normalizePastedText maps terminal and clipboard newline variants to LF so
@@ -2850,10 +2868,9 @@ func (a *App) hasEditableTextTab() bool {
 	return tab != nil && !tab.IsReadOnly()
 }
 
-// hasPasteTarget reports whether the internal clipboard can be inserted into
-// the active editable text tab.
+// hasPasteTarget reports whether the active tab accepts explicit paste.
 func (a *App) hasPasteTarget() bool {
-	return a.hasEditableTextTab() && a.hasClipboard()
+	return a.hasEditableTextTab()
 }
 
 // hasCommentableTab reports whether the active tab is editable text with a
@@ -2867,8 +2884,8 @@ func (a *App) hasCommentableTab() bool {
 	return ok
 }
 
-// hasClipboard reports whether the editor's internal clipboard has content
-// to paste.
+// hasClipboard reports whether the editor's internal clipboard has copied
+// selection text.
 func (a *App) hasClipboard() bool { return a.clipBuf != "" }
 
 // hasUndo reports whether the active tab has anything to undo. Used to
@@ -3064,7 +3081,7 @@ func (a *App) menuCut() {
 	a.cutSelection()
 }
 
-// menuPaste pastes the editor's internal clipboard at the cursor.
+// menuPaste pastes the current system clipboard text at the cursor.
 func (a *App) menuPaste() {
 	a.closeMenu()
 	a.pasteClipboard()

@@ -167,6 +167,7 @@ func TestHandleEvent_BracketedPaste(t *testing.T) {
 	tab.IndentUnit = "  "
 	a.tabs = []*editor.Tab{tab}
 	a.clipBuf = "leader action must not run"
+	a.readFromSystem = func() (string, error) { return "", fmt.Errorf("system clipboard unavailable") }
 
 	a.handleEvent(tcell.NewEventPaste(true))
 	a.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
@@ -201,9 +202,35 @@ func TestHandleEvent_BracketedPaste(t *testing.T) {
 	}
 }
 
+// TestHandleEvent_BracketedPastePrefersSystemClipboard makes bracketed paste
+// use the host clipboard when it is readable instead of the captured terminal
+// payload. This is important when a terminal transforms pasted key events.
+func TestHandleEvent_BracketedPastePrefersSystemClipboard(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	tab, err := editor.NewTab("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.tabs = []*editor.Tab{tab}
+	a.readFromSystem = func() (string, error) { return "system\r\ntext", nil }
+
+	a.handleEvent(tcell.NewEventPaste(true))
+	for _, r := range "captured" {
+		a.handleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
+	}
+	a.handleEvent(tcell.NewEventPaste(false))
+
+	if got := tab.Buffer.String(); got != "system\ntext" {
+		t.Fatalf("buffer = %q, want normalized system clipboard text", got)
+	}
+}
+
 // pasteEventText drives a complete bracketed-paste lifecycle through the app
 // event router, including command keys that must remain inert as pasted data.
+// It forces the captured-terminal fallback so its callers do not depend on
+// the host clipboard contents.
 func pasteEventText(a *App, prefix, suffix string) {
+	a.readFromSystem = func() (string, error) { return "", fmt.Errorf("system clipboard unavailable") }
 	a.handleEvent(tcell.NewEventPaste(true))
 	for _, r := range prefix {
 		a.handleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))

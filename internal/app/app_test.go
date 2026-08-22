@@ -25,6 +25,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/cloudmanic/spice-edit/internal/clipboard"
 	"github.com/cloudmanic/spice-edit/internal/customactions"
 	"github.com/cloudmanic/spice-edit/internal/editor"
 	"github.com/cloudmanic/spice-edit/internal/filetree"
@@ -51,6 +52,7 @@ func newTestApp(t *testing.T, root string) *App {
 	a := &App{
 		screen:         scr,
 		copyToSystem:   func(string) error { return nil },
+		readFromSystem: clipboard.ReadSystem,
 		showFrame:      scr.Show,
 		theme:          theme.Default(),
 		rootDir:        tree.Root.Path,
@@ -451,6 +453,10 @@ func TestHasTab_Predicates(t *testing.T) {
 	tab.Cursor = editor.Position{Line: 0, Col: 1}
 	if !a.hasSelection() {
 		t.Fatal("expected selection after Anchor != Cursor")
+	}
+
+	if !a.hasPasteTarget() {
+		t.Fatal("editable tab should be a paste target with an empty internal clipboard")
 	}
 
 	a.clipBuf = "x"
@@ -974,15 +980,9 @@ func TestCopyCutPaste(t *testing.T) {
 		// Some buffer impls return empty slice; both fine.
 	}
 
-	// Paste empty path: when clipBuf empty, flash about external paste.
-	a.clipBuf = ""
-	a.pasteClipboard()
-	if !strings.Contains(a.statusMsg, "clipboard empty") {
-		t.Fatalf("expected empty-clip flash, got %q", a.statusMsg)
-	}
-
-	// Paste with content.
-	a.clipBuf = "X"
+	// Paste reads from the system clipboard rather than the internal copy buffer.
+	a.clipBuf = "internal"
+	a.readFromSystem = func() (string, error) { return "X", nil }
 	a.pasteClipboard()
 }
 
@@ -994,8 +994,8 @@ func TestNormalizePastedText(t *testing.T) {
 	}
 }
 
-// TestPasteClipboard_NormalizesNewlines keeps internal and terminal pastes on
-// the same insertion path so copied CRLF text does not leave stray CR bytes.
+// TestPasteClipboard_NormalizesNewlines keeps explicit system and terminal
+// pastes on the same insertion path so copied CRLF text has no stray CR bytes.
 func TestPasteClipboard_NormalizesNewlines(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	tab, err := editor.NewTab("")
@@ -1003,7 +1003,7 @@ func TestPasteClipboard_NormalizesNewlines(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.tabs = []*editor.Tab{tab}
-	a.clipBuf = "a\r\nb\rc"
+	a.readFromSystem = func() (string, error) { return "a\r\nb\rc", nil }
 
 	a.pasteClipboard()
 
@@ -1088,8 +1088,58 @@ func TestMenuSelectAll_InertWithoutEditableText(t *testing.T) {
 // TestPasteClipboard_NoTab is safe with no tab open.
 func TestPasteClipboard_NoTab(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
-	a.clipBuf = "X"
+	a.readFromSystem = func() (string, error) {
+		t.Fatal("system clipboard should not be read without a paste target")
+		return "", nil
+	}
 	a.pasteClipboard() // no tab — nothing to paste into.
+}
+
+// TestMenuPaste_UsesSystemClipboard verifies explicit menu paste ignores the
+// editor's internal copy buffer and inserts only the current system text.
+func TestMenuPaste_UsesSystemClipboard(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	tab, err := editor.NewTab("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.tabs = []*editor.Tab{tab}
+	a.clipBuf = "internal text"
+	a.readFromSystem = func() (string, error) { return "system text", nil }
+
+	a.menuPaste()
+
+	if got := tab.Buffer.String(); got != "system text" {
+		t.Fatalf("buffer = %q, want system clipboard text", got)
+	}
+	if got := a.clipBuf; got != "internal text" {
+		t.Fatalf("clipBuf = %q, want retained internal text", got)
+	}
+}
+
+// TestMenuPaste_SystemClipboardError keeps explicit paste from falling back
+// to copied text when the system clipboard reader is unavailable.
+func TestMenuPaste_SystemClipboardError(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	tab, err := editor.NewTab("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.tabs = []*editor.Tab{tab}
+	a.clipBuf = "internal text"
+	a.readFromSystem = func() (string, error) { return "", errors.New("pbpaste unavailable") }
+
+	a.menuPaste()
+
+	if got := tab.Buffer.String(); got != "" {
+		t.Fatalf("buffer = %q, want unchanged after system reader error", got)
+	}
+	if got := a.clipBuf; got != "internal text" {
+		t.Fatalf("clipBuf = %q, want retained internal text", got)
+	}
+	if !strings.Contains(strings.ToLower(a.statusMsg), "system clipboard") {
+		t.Fatalf("status = %q, want system-clipboard error", a.statusMsg)
+	}
 }
 
 // TestMenuSaveAndClose saves then closes the active tab.

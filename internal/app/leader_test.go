@@ -294,18 +294,44 @@ func TestHandleKey_LeaderClipboard(t *testing.T) {
 		t.Fatalf("cut text = %q, want empty", got)
 	}
 
-	a.clipBuf = "hello"
+	a.clipBuf = "internal hello"
+	a.readFromSystem = func() (string, error) { return "system hello", nil }
 	sendLeader(a, 'v')
-	if got := tab.Buffer.String(); got != "hello" {
-		t.Fatalf("paste text = %q, want hello", got)
+	if got := tab.Buffer.String(); got != "system hello" {
+		t.Fatalf("paste text = %q, want system hello", got)
 	}
 
 	sendLeader(a, 'a')
-	if got := tab.SelectionText(); got != "hello" {
-		t.Fatalf("Select All selection = %q, want hello", got)
+	if got := tab.SelectionText(); got != "system hello" {
+		t.Fatalf("Select All selection = %q, want system hello", got)
 	}
 	if got := len(*copied); got != 2 {
 		t.Fatalf("Select All writes = %d, want 2", got)
+	}
+}
+
+// TestHandleKey_LeaderPasteSystemClipboardError keeps Esc-v from falling
+// back to the internal copy buffer when the system reader fails.
+func TestHandleKey_LeaderPasteSystemClipboardError(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	tab, err := editor.NewTab("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.tabs = []*editor.Tab{tab}
+	a.clipBuf = "internal text"
+	a.readFromSystem = func() (string, error) { return "", os.ErrNotExist }
+
+	sendLeader(a, 'v')
+
+	if got := tab.Buffer.String(); got != "" {
+		t.Fatalf("buffer = %q, want unchanged after system reader error", got)
+	}
+	if got := a.clipBuf; got != "internal text" {
+		t.Fatalf("clipBuf = %q, want retained internal text", got)
+	}
+	if !strings.Contains(strings.ToLower(a.statusMsg), "system clipboard") {
+		t.Fatalf("status = %q, want system-clipboard error", a.statusMsg)
 	}
 }
 
