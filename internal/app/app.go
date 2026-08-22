@@ -221,6 +221,7 @@ func builtinMenuGroups() [][]menuItemDef {
 		// File actions
 		{
 			{shortcut: "Esc n", action: (*App).menuNewFile, enabled: alwaysTrue, labelFor: (*App).newFileLabel},
+			{label: "New folder", action: (*App).menuNewFolder, enabled: alwaysTrue},
 			{label: "Open with default app", shortcut: "Esc o", action: (*App).menuOpenWithDefaultApp, enabled: (*App).hasFileTab},
 			{label: "Show in file manager", shortcut: "Esc e", action: (*App).menuShowInFileManager, enabled: alwaysTrue},
 			{label: "Rename file", action: (*App).menuRename, enabled: (*App).hasFileTab},

@@ -546,6 +546,66 @@ func TestNewFileLabel_TruncatesLongPaths(t *testing.T) {
 	}
 }
 
+// TestMenuNewFolder opens a prompt rooted at the active folder and creates
+// nested directories when the submitted relative path is accepted.
+func TestMenuNewFolder(t *testing.T) {
+	root := t.TempDir()
+	active := filepath.Join(root, "work")
+	if err := os.Mkdir(active, 0o755); err != nil {
+		t.Fatalf("seed active folder: %v", err)
+	}
+	a := newTestApp(t, root)
+	a.setActiveFolder(active)
+
+	a.menuNewFolder()
+	if !a.promptOpen {
+		t.Fatal("expected folder prompt to open")
+	}
+	if got := a.promptTitle; got != "New folder" {
+		t.Fatalf("prompt title = %q, want New folder", got)
+	}
+	if got, want := a.promptHint, "in "+a.relativeFolderLabel(active); got != want {
+		t.Fatalf("prompt hint = %q, want %q", got, want)
+	}
+
+	a.promptValue = []rune("assets/icons")
+	a.promptSubmit()
+	if _, err := os.Stat(filepath.Join(active, "assets", "icons")); err != nil {
+		t.Fatalf("nested folder missing after submit: %v", err)
+	}
+}
+
+// TestMenuNewFolder_MissingActiveFolderFallsBackToRoot ensures an externally
+// deleted active folder cannot leave the prompt targeting a stale path.
+func TestMenuNewFolder_MissingActiveFolderFallsBackToRoot(t *testing.T) {
+	root := t.TempDir()
+	a := newTestApp(t, root)
+	a.activeFolder = filepath.Join(root, "missing")
+
+	a.menuNewFolder()
+	if got, want := a.promptHint, "in "+a.relativeFolderLabel(root); got != want {
+		t.Fatalf("prompt hint = %q, want %q", got, want)
+	}
+	if got := a.activeFolder; got != root {
+		t.Fatalf("active folder = %q, want root %q", got, root)
+	}
+}
+
+// TestBuiltinMenuNewFolderHasNoShortcut keeps folder creation reachable from
+// the menu without claiming an Esc-leader shortcut that has not been wired.
+func TestBuiltinMenuNewFolderHasNoShortcut(t *testing.T) {
+	fileActions := builtinMenuGroups()[3]
+	for _, item := range fileActions {
+		if item.label == "New folder" {
+			if item.shortcut != "" {
+				t.Fatalf("New folder shortcut = %q, want empty", item.shortcut)
+			}
+			return
+		}
+	}
+	t.Fatal("New folder menu item missing")
+}
+
 // TestRelativeFolderLabel covers the three branches: root, subdir, and a
 // non-relatable path.
 func TestRelativeFolderLabel(t *testing.T) {
@@ -2122,13 +2182,13 @@ func TestMenuLayout_NoCustomActions(t *testing.T) {
 	a.customActions = nil
 	items, dividers, h := a.menuLayout()
 
-	if h != 37 {
-		t.Errorf("modalHeight = %d, want 37", h)
+	if h != 38 {
+		t.Errorf("modalHeight = %d, want 38", h)
 	}
-	if got := len(items); got != 27 {
-		t.Errorf("item count = %d, want 27 built-ins", got)
+	if got := len(items); got != 28 {
+		t.Errorf("item count = %d, want 28 built-ins", got)
 	}
-	wantDiv := []int{2, 8, 12, 15, 25, 31, 34}
+	wantDiv := []int{2, 8, 12, 15, 26, 32, 35}
 	if len(dividers) != len(wantDiv) {
 		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
 	}
@@ -2315,8 +2375,8 @@ func TestMenuLayout_WithCustomActions(t *testing.T) {
 	}
 	items, _, h := a.menuLayout()
 
-	if h != 40 { // 37 + 2 items + 1 divider
-		t.Errorf("modalHeight = %d, want 40", h)
+	if h != 41 { // 38 + 2 items + 1 divider
+		t.Errorf("modalHeight = %d, want 41", h)
 	}
 	// Custom actions should be the second-to-last and third-to-last
 	// rows, with Quit as the final row.

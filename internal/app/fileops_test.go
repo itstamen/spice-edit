@@ -58,6 +58,59 @@ func TestCreateEmptyFile_RefusesExisting(t *testing.T) {
 	}
 }
 
+// TestCreateFolder_NestedAndRefusesExisting creates a nested directory tree
+// and confirms a second request cannot silently succeed against the same
+// destination.
+func TestCreateFolder_NestedAndRefusesExisting(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "assets", "icons")
+
+	if err := createFolder(target); err != nil {
+		t.Fatalf("createFolder: %v", err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat after create: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("created target is not a directory: %v", info.Mode())
+	}
+	if err := createFolder(target); err == nil {
+		t.Fatal("expected error when creating an existing folder, got nil")
+	}
+}
+
+// TestChildPath_RejectsUnsafeNames keeps folder creation contained beneath
+// the active folder even when a prompt callback is invoked directly.
+func TestChildPath_RejectsUnsafeNames(t *testing.T) {
+	parent := t.TempDir()
+	unsafeNames := []string{
+		"",
+		".",
+		"..",
+		filepath.Join("..", "outside"),
+		filepath.Join("folder", ".."),
+		string(filepath.Separator) + "tmp",
+	}
+	for _, name := range unsafeNames {
+		if _, err := childPath(parent, name); err == nil {
+			t.Errorf("childPath(%q) accepted unsafe path", name)
+		}
+	}
+}
+
+// TestDoCreateFolder_UnsafePathFlashesConcreteError keeps direct callers on
+// the same validation boundary as the prompt flow.
+func TestDoCreateFolder_UnsafePathFlashesConcreteError(t *testing.T) {
+	root := t.TempDir()
+	a := newTestApp(t, root)
+
+	a.doCreateFolder(root, "../outside")
+	if !strings.HasPrefix(a.statusMsg, "Create folder failed: ") {
+		t.Fatalf("status message = %q, want concrete create-folder error", a.statusMsg)
+	}
+}
+
 // TestRenameFile_Basic renames a file and confirms the source is gone and
 // the destination has the original contents.
 func TestRenameFile_Basic(t *testing.T) {

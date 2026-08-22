@@ -5,13 +5,13 @@
 // Copyright: 2026 Cloudmanic, LLC. All rights reserved.
 // =============================================================================
 
-// fileops.go implements the editor's three file-management actions:
-// create-empty-file, rename-file, and delete-file. Each one is exposed two
-// ways:
+// fileops.go implements the editor's four file-management actions:
+// create-empty-file, create-folder, rename-file, and delete-file. Each can
+// be exposed two ways:
 //
 //   • From the main ≡ action menu, targeting the currently active tab
-//     (Rename / Delete only — there's no obvious "where" for a new file
-//     in that context, so New File lives only on the tree right-click).
+//     or folder (Rename / Delete target the tab; New File / New Folder
+//     target the active folder).
 //
 //   • From the right-click context menu over a file-tree row. For folders
 //     the menu offers New File (creates a child) plus Rename / Delete; for
@@ -48,6 +48,33 @@ func createEmptyFile(path string) error {
 		return err
 	}
 	return f.Close()
+}
+
+// createFolder creates path and any missing parent directories. An existing
+// target is rejected so a successful create always describes a new folder.
+func createFolder(path string) error {
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("a folder named %q already exists", filepath.Base(path))
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return os.MkdirAll(path, 0o755)
+}
+
+// childPath resolves name under parent after ensuring it is a non-empty
+// relative path that cannot collapse to or escape from the parent directory.
+func childPath(parent, name string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("folder path cannot be empty")
+	}
+	if filepath.IsAbs(name) {
+		return "", fmt.Errorf("folder path must be relative")
+	}
+	clean := filepath.Clean(name)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("folder path must stay within the active folder")
+	}
+	return filepath.Join(parent, clean), nil
 }
 
 // renameFile moves oldPath to newPath. It refuses to clobber an existing
@@ -127,6 +154,33 @@ func (a *App) doCreateFile(parent, name string) {
 	a.invalidateFinder()
 	a.openFile(target)
 	a.flash(fmt.Sprintf("Created %s", name))
+}
+
+// doCreateFolder creates a directory tree inside parent, refreshes the views
+// backed by the project files, and reveals the new folder in the sidebar.
+func (a *App) doCreateFolder(parent, name string) {
+	name = trimSpace(name)
+	target, err := childPath(parent, name)
+	if err != nil {
+		a.flash(fmt.Sprintf("Create folder failed: %v", err))
+		return
+	}
+	if err := createFolder(target); err != nil {
+		a.flash(fmt.Sprintf("Create folder failed: %v", err))
+		return
+	}
+	a.refreshTree()
+	a.refreshGitStatus()
+	a.invalidateFinder()
+	if a.tree != nil {
+		_, _, _, sidebarH := a.sidebarRect()
+		listH := sidebarH - 2
+		if listH < 0 {
+			listH = 0
+		}
+		a.tree.Reveal(target, listH)
+	}
+	a.flash(fmt.Sprintf("Created folder %s", name))
 }
 
 // doRenameFile renames oldPath to a sibling whose basename is newName,
@@ -219,6 +273,29 @@ func (a *App) menuNewFile() {
 		"",
 		func(app *App, value string) {
 			app.doCreateFile(folder, value)
+		},
+	)
+}
+
+// menuNewFolder prompts for a directory path beneath the active folder. A
+// missing active folder falls back to the project root before opening the
+// prompt, matching New file's stale-folder handling.
+func (a *App) menuNewFolder() {
+	a.closeMenu()
+	folder := a.activeFolder
+	if folder == "" {
+		folder = a.rootDir
+	}
+	if info, err := os.Stat(folder); err != nil || !info.IsDir() {
+		folder = a.rootDir
+		a.setActiveFolder(folder)
+	}
+	a.openPrompt(
+		"New folder",
+		"in "+a.relativeFolderLabel(folder),
+		"",
+		func(app *App, value string) {
+			app.doCreateFolder(folder, value)
 		},
 	)
 }
