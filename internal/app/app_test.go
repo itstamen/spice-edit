@@ -781,6 +781,62 @@ func TestMenuToggleLineComment_Unsupported(t *testing.T) {
 	}
 }
 
+// TestBuiltinMenu_DeleteCurrentLine exposes the line deletion action with its
+// Esc-d shortcut and routes activation to the active tab.
+func TestBuiltinMenu_DeleteCurrentLine(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "lines.txt")
+	if err := os.WriteFile(target, []byte("one\ntwo\nthree"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	tab := a.activeTabPtr()
+	tab.Anchor = editor.Position{Line: 1, Col: 0}
+	tab.Cursor = editor.Position{Line: 1, Col: 1}
+	a.openMenu()
+
+	item := menuItemByLabel(t, a, "Delete current line")
+	if item.shortcut != "Esc d" {
+		t.Fatalf("shortcut = %q, want Esc d", item.shortcut)
+	}
+	if !item.enabled(a) {
+		t.Fatal("delete current line should be enabled for editable text")
+	}
+	item.action(a)
+
+	if a.menuOpen {
+		t.Fatal("delete current line should close the menu")
+	}
+	if got, want := tab.Buffer.String(), "one\nthree"; got != want {
+		t.Fatalf("menu delete buffer = %q, want %q", got, want)
+	}
+}
+
+// TestMenuDeleteCurrentLine_ReadOnlyIsNoOp keeps direct menu activation inert
+// when the active tab is read-only.
+func TestMenuDeleteCurrentLine_ReadOnlyIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "blocked.pdf")
+	if err := os.WriteFile(target, []byte("%PDF-1.7\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	tab := a.activeTabPtr()
+	want := tab.Buffer.String()
+	item := menuItemByLabel(t, a, "Delete current line")
+	if item.enabled(a) {
+		t.Fatal("delete current line should be disabled for read-only tabs")
+	}
+
+	item.action(a)
+
+	if got := tab.Buffer.String(); got != want {
+		t.Fatalf("menu delete changed read-only buffer to %q, want %q", got, want)
+	}
+}
+
 // TestTabBarClick_OpensMenu clicks the ≡ button cell and verifies the menu
 // opens.
 func TestTabBarClick_OpensMenu(t *testing.T) {
@@ -2233,13 +2289,13 @@ func TestMenuLayout_NoCustomActions(t *testing.T) {
 	a.customActions = nil
 	items, dividers, h := a.menuLayout()
 
-	if h != 38 {
-		t.Errorf("modalHeight = %d, want 38", h)
+	if h != 39 {
+		t.Errorf("modalHeight = %d, want 39", h)
 	}
-	if got := len(items); got != 28 {
-		t.Errorf("item count = %d, want 28 built-ins", got)
+	if got := len(items); got != 29 {
+		t.Errorf("item count = %d, want 29 built-ins", got)
 	}
-	wantDiv := []int{2, 8, 12, 15, 26, 32, 35}
+	wantDiv := []int{2, 8, 12, 15, 26, 33, 36}
 	if len(dividers) != len(wantDiv) {
 		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
 	}
@@ -2426,8 +2482,8 @@ func TestMenuLayout_WithCustomActions(t *testing.T) {
 	}
 	items, _, h := a.menuLayout()
 
-	if h != 41 { // 38 + 2 items + 1 divider
-		t.Errorf("modalHeight = %d, want 41", h)
+	if h != 42 { // 39 + 2 items + 1 divider
+		t.Errorf("modalHeight = %d, want 42", h)
 	}
 	// Custom actions should be the second-to-last and third-to-last
 	// rows, with Quit as the final row.

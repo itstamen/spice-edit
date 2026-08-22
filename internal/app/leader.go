@@ -40,6 +40,7 @@ func leaderBindings() []leaderBinding {
 		{'x', (*App).menuCut},
 		{'v', (*App).menuPaste},
 		{'a', (*App).menuSelectAll},
+		{'d', (*App).menuDeleteCurrentLine},
 		{'u', (*App).menuUndo},
 		{'r', (*App).menuRedo},
 		{'w', (*App).menuClose},

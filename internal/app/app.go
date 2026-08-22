@@ -237,6 +237,7 @@ func builtinMenuGroups() [][]menuItemDef {
 			{label: "Cut selection", shortcut: "Esc x", action: (*App).menuCut, enabled: (*App).hasSelection},
 			{label: "Paste", shortcut: "Esc v", action: (*App).menuPaste, enabled: (*App).hasPasteTarget},
 			{label: "Select all", shortcut: "Esc a", action: (*App).menuSelectAll, enabled: (*App).hasEditableTextTab},
+			{label: "Delete current line", shortcut: "Esc d", action: (*App).menuDeleteCurrentLine, enabled: (*App).hasEditableTextTab},
 			{label: "Toggle line comment", shortcut: "Esc /", action: (*App).menuToggleLineComment, enabled: (*App).hasCommentableTab},
 		},
 		// View toggle
@@ -2993,6 +2994,15 @@ func (a *App) menuSelectAll() {
 		return
 	}
 	tab.SelectAll()
+}
+
+// menuDeleteCurrentLine removes the line under the cursor or every line
+// touched by the active selection.
+func (a *App) menuDeleteCurrentLine() {
+	a.closeMenu()
+	if tab := a.activeTabPtr(); tab != nil {
+		tab.DeleteCurrentLines()
+	}
 }
 
 // menuToggleLineComment comments or uncomments the active line selection.

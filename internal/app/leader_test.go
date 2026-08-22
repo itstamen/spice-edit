@@ -220,6 +220,47 @@ func TestHandleKey_LeaderToggleLineComment(t *testing.T) {
 	}
 }
 
+// TestLeaderDeleteCurrentLine removes every line touched by a selection via
+// the Esc-d leader binding.
+func TestLeaderDeleteCurrentLine(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "lines.txt")
+	if err := os.WriteFile(target, []byte("one\ntwo\nthree"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	tab := a.activeTabPtr()
+	tab.Anchor = editor.Position{Line: 0, Col: 0}
+	tab.Cursor = editor.Position{Line: 1, Col: 1}
+
+	sendLeader(a, 'd')
+
+	if got, want := tab.Buffer.String(), "three"; got != want {
+		t.Fatalf("Esc-d buffer = %q, want %q", got, want)
+	}
+}
+
+// TestLeaderDeleteCurrentLine_ReadOnlyIsNoOp keeps the leader route inert for
+// tabs that cannot accept text edits.
+func TestLeaderDeleteCurrentLine_ReadOnlyIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "blocked.pdf")
+	if err := os.WriteFile(target, []byte("%PDF-1.7\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	tab := a.activeTabPtr()
+	want := tab.Buffer.String()
+
+	sendLeader(a, 'd')
+
+	if got := tab.Buffer.String(); got != want {
+		t.Fatalf("Esc-d changed read-only buffer to %q, want %q", got, want)
+	}
+}
+
 // TestHandleKey_LeaderClipboard verifies Esc clipboard bindings share the
 // guarded menu actions and Select All does not publish selection text.
 func TestHandleKey_LeaderClipboard(t *testing.T) {
