@@ -104,9 +104,6 @@ func highlightSource(filename, src string, t theme.Theme) [][]tcell.Style {
 	if lexer == nil {
 		lexer = lexers.Fallback
 	}
-	// Coalesce merges adjacent same-type tokens; cheaper to scan in render.
-	lexer = chroma.Coalesce(lexer)
-
 	base := tcell.StyleDefault.Background(t.BG).Foreground(t.Text)
 
 	// Pre-allocate a styles grid sized to the source. We seed every cell
@@ -114,13 +111,22 @@ func highlightSource(filename, src string, t theme.Theme) [][]tcell.Style {
 	lines := strings.Split(src, "\n")
 	styles := baseStyleGrid(lines, base)
 
+	applyLexerOverlay(lexer, src, 0, styles, t, base)
+	applyMarkdownStructuralStyles(filename, lines, styles, t, base)
+	return styles
+}
+
+// applyLexerOverlay tokenises src with lexer and overlays the resulting token
+// styles onto styles, beginning at lineOffset.
+func applyLexerOverlay(lexer chroma.Lexer, src string, lineOffset int, styles [][]tcell.Style, t theme.Theme, base tcell.Style) {
+	// Coalesce merges adjacent same-type tokens; cheaper to scan in render.
+	lexer = chroma.Coalesce(lexer)
 	iter, err := lexer.Tokenise(nil, src)
 	if err != nil {
-		applyMarkdownStructuralStyles(filename, lines, styles, t, base)
-		return styles
+		return
 	}
 
-	line, col := 0, 0
+	line, col := lineOffset, 0
 	for tok := iter(); tok != chroma.EOF; tok = iter() {
 		st := styleForToken(tok.Type, t, base)
 		for _, r := range tok.Value {
@@ -129,14 +135,12 @@ func highlightSource(filename, src string, t theme.Theme) [][]tcell.Style {
 				col = 0
 				continue
 			}
-			if line < len(styles) && col < len(styles[line]) {
+			if line >= 0 && line < len(styles) && col >= 0 && col < len(styles[line]) {
 				styles[line][col] = st
 			}
 			col++
 		}
 	}
-	applyMarkdownStructuralStyles(filename, lines, styles, t, base)
-	return styles
 }
 
 // baseStyleGrid returns a correctly shaped grid pre-filled with base.
@@ -154,25 +158,25 @@ func baseStyleGrid(lines []string, base tcell.Style) [][]tcell.Style {
 }
 
 // styleForToken maps a Chroma token type to a tcell.Style using the active
-// theme. We match by category first (Keyword, LiteralString, etc.) so the
-// mapping stays tight across the dozens of language-specific subtypes.
+// theme. Literal strings and numbers use their subcategories; the remaining
+// mappings use categories to cover language-specific token subtypes.
 func styleForToken(tt chroma.TokenType, t theme.Theme, base tcell.Style) tcell.Style {
-	switch tt.Category() {
-	case chroma.Keyword:
-		return base.Foreground(t.SynKeyword)
-	case chroma.LiteralString:
+	switch {
+	case tt.InSubCategory(chroma.LiteralString):
 		return base.Foreground(t.SynString)
-	case chroma.LiteralNumber:
+	case tt.InSubCategory(chroma.LiteralNumber):
 		return base.Foreground(t.SynNumber)
-	case chroma.Comment:
+	case tt.InCategory(chroma.Keyword):
+		return base.Foreground(t.SynKeyword)
+	case tt.InCategory(chroma.Comment):
 		return base.Foreground(t.SynComment).Italic(true)
-	case chroma.Operator:
+	case tt.InCategory(chroma.Operator):
 		return base.Foreground(t.SynOperator)
-	case chroma.Punctuation:
+	case tt.InCategory(chroma.Punctuation):
 		return base.Foreground(t.SynPunct)
-	case chroma.Literal:
+	case tt.InCategory(chroma.Literal):
 		return base.Foreground(t.SynConstant)
-	case chroma.Name:
+	case tt.InCategory(chroma.Name):
 		switch tt {
 		case chroma.NameFunction, chroma.NameFunctionMagic:
 			return base.Foreground(t.SynFunction)
@@ -196,39 +200,63 @@ func styleForToken(tt chroma.TokenType, t theme.Theme, base tcell.Style) tcell.S
 	return base
 }
 
-// applyMarkdownStructuralStyles overlays lightweight Markdown document cues on
-// top of Chroma's token grid. It keeps raw Markdown text visible and editable;
-// only foreground emphasis changes for headings and fenced-code delimiters.
+// applyMarkdownStructuralStyles overlays Markdown document cues and fenced-code
+// syntax colors on top of Chroma's token grid.
 func applyMarkdownStructuralStyles(filename string, lines []string, styles [][]tcell.Style, t theme.Theme, base tcell.Style) {
 	if !isMarkdownFilename(filename) {
 		return
 	}
-	inFence := false
-	fenceMarker := ""
+	var activeFence *markdownFenceDescriptor
+	bodyStart := 0
+	flushFenceBody := func(end int) {
+		if activeFence == nil || bodyStart >= end {
+			return
+		}
+
+		codeBase := base.Foreground(t.SynPunct)
+		for i := bodyStart; i < end && i < len(styles); i++ {
+			styleRow(styles[i], codeBase)
+		}
+		if activeFence.language == "" {
+			return
+		}
+		lexer := lexers.Get(activeFence.language)
+		if lexer == nil {
+			return
+		}
+		applyLexerOverlay(lexer, strings.Join(lines[bodyStart:end], "\n"), bodyStart, styles, t, codeBase)
+	}
+
 	for lineIdx, line := range lines {
 		if lineIdx >= len(styles) {
 			break
+		}
+		fenceStart, fence, markerEnd, labelStart, labelEnd, isFence := markdownFence(line)
+		if activeFence != nil {
+			if isFence && fence.marker == activeFence.marker && fence.length >= activeFence.length {
+				flushFenceBody(lineIdx)
+				styleRuneRange(styles[lineIdx], fenceStart, markerEnd, base.Foreground(t.Muted))
+				activeFence = nil
+			}
+			continue
 		}
 		if level, ok := markdownHeadingLevel(line); ok {
 			styleRow(styles[lineIdx], base.Foreground(markdownHeadingColor(level, t)).Bold(true))
 			continue
 		}
-		if fence, marker, markerEnd, labelStart, labelEnd, ok := markdownFence(line); ok {
+		if isFence {
 			fenceStyle := base.Foreground(t.Muted)
 			labelStyle := base.Foreground(t.Accent).Bold(true)
-			styleRuneRange(styles[lineIdx], fence, markerEnd, fenceStyle)
-			if !inFence && labelStart < labelEnd {
+			styleRuneRange(styles[lineIdx], fenceStart, markerEnd, fenceStyle)
+			if labelStart < labelEnd {
 				styleRuneRange(styles[lineIdx], labelStart, labelEnd, labelStyle)
 			}
-			if inFence && marker == fenceMarker {
-				inFence = false
-				fenceMarker = ""
-			} else if !inFence {
-				inFence = true
-				fenceMarker = marker
-			}
+			fenceCopy := fence
+			activeFence = &fenceCopy
+			bodyStart = lineIdx + 1
 		}
 	}
+	flushFenceBody(len(lines))
 }
 
 // isMarkdownFilename reports whether filename should receive Markdown-specific
@@ -284,27 +312,34 @@ func markdownHeadingColor(level int, t theme.Theme) tcell.Color {
 	}
 }
 
-// markdownFence detects a fenced-code delimiter and returns rune ranges for
-// the fence punctuation and optional language label.
-func markdownFence(line string) (fenceStart int, marker string, markerEnd, labelStart, labelEnd int, ok bool) {
+// markdownFenceDescriptor identifies an opening Markdown code fence.
+type markdownFenceDescriptor struct {
+	marker   rune
+	length   int
+	language string
+}
+
+// markdownFence detects a fenced-code delimiter and returns its descriptor
+// plus rune ranges for the fence punctuation and optional language label.
+func markdownFence(line string) (fenceStart int, fence markdownFenceDescriptor, markerEnd, labelStart, labelEnd int, ok bool) {
 	runes := []rune(line)
 	i := 0
 	for i < len(runes) && i < 4 && runes[i] == ' ' {
 		i++
 	}
 	if i > 3 || i >= len(runes) {
-		return 0, "", 0, 0, 0, false
+		return 0, markdownFenceDescriptor{}, 0, 0, 0, false
 	}
 	ch := runes[i]
 	if ch != '`' && ch != '~' {
-		return 0, "", 0, 0, 0, false
+		return 0, markdownFenceDescriptor{}, 0, 0, 0, false
 	}
 	j := i
 	for j < len(runes) && runes[j] == ch {
 		j++
 	}
 	if j-i < 3 {
-		return 0, "", 0, 0, 0, false
+		return 0, markdownFenceDescriptor{}, 0, 0, 0, false
 	}
 	k := j
 	for k < len(runes) && (runes[k] == ' ' || runes[k] == '\t') {
@@ -314,7 +349,11 @@ func markdownFence(line string) (fenceStart int, marker string, markerEnd, label
 	for labelEnd < len(runes) && runes[labelEnd] != ' ' && runes[labelEnd] != '\t' {
 		labelEnd++
 	}
-	return i, string(ch), j, k, labelEnd, true
+	return i, markdownFenceDescriptor{
+		marker:   ch,
+		length:   j - i,
+		language: string(runes[k:labelEnd]),
+	}, j, k, labelEnd, true
 }
 
 // styleRow applies st to every rune style in row.

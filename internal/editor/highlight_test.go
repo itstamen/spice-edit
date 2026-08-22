@@ -278,9 +278,77 @@ func TestHighlight_MarkdownStructuralStyles(t *testing.T) {
 	}
 }
 
-// TestHighlight_MarkdownStructuralStylesDoNotApplyToTextFiles keeps Markdown
+// TestHighlight_MarkdownFencedCode overlays language-aware colors inside
+// Markdown fences while preserving the document-level structural styles.
+func TestHighlight_MarkdownFencedCode(t *testing.T) {
+	th := theme.Default()
+
+	foregroundAt := func(styles [][]tcell.Style, line, col int) tcell.Color {
+		fg, _, _ := styles[line][col].Decompose()
+		return fg
+	}
+	assertForeground := func(t *testing.T, styles [][]tcell.Style, line, col int, want tcell.Color) {
+		t.Helper()
+		if got := foregroundAt(styles, line, col); got != want {
+			t.Fatalf("foreground at %d:%d = %v, want %v", line, col, got, want)
+		}
+	}
+
+	t.Run("Go", func(t *testing.T) {
+		src := "```go\nfunc main() {}\n\t// comment\n```\n"
+		got := Highlight("README.md", src, th)
+
+		assertForeground(t, got, 1, 0, th.SynKeyword)
+		assertForeground(t, got, 2, 1, th.SynComment)
+	})
+
+	t.Run("JSON", func(t *testing.T) {
+		line := `{"name":"spice","count":42}`
+		src := "```json\n" + line + "\n```\n"
+		got := Highlight("README.md", src, th)
+
+		assertForeground(t, got, 1, strings.Index(line, `"spice"`), th.SynString)
+		assertForeground(t, got, 1, strings.Index(line, "42"), th.SynNumber)
+	})
+
+	t.Run("UnlabelledAndUnknownUseCodeBase", func(t *testing.T) {
+		src := "```\nplain text\n```\n```not-a-language\nunknown text\n```\n"
+		got := Highlight("README.md", src, th)
+
+		assertForeground(t, got, 1, 0, th.SynPunct)
+		assertForeground(t, got, 4, 0, th.SynPunct)
+	})
+
+	t.Run("FourBackticksRequireFourToClose", func(t *testing.T) {
+		src := "````\nbody one\n```\nbody two\n````\n"
+		got := Highlight("README.md", src, th)
+
+		assertForeground(t, got, 1, 0, th.SynPunct)
+		assertForeground(t, got, 2, 0, th.SynPunct)
+		assertForeground(t, got, 3, 0, th.SynPunct)
+		assertForeground(t, got, 4, 0, th.Muted)
+	})
+
+	t.Run("TildeFence", func(t *testing.T) {
+		src := "~~~json\n{\"value\": \"one\", \"count\": 1}\n~~~\n"
+		got := Highlight("README.md", src, th)
+
+		assertForeground(t, got, 1, 10, th.SynString)
+		assertForeground(t, got, 1, 26, th.SynNumber)
+		assertForeground(t, got, 2, 0, th.Muted)
+	})
+
+	t.Run("UnclosedFenceExtendsToEnd", func(t *testing.T) {
+		src := "```go\nfunc main() {}\n"
+		got := Highlight("README.md", src, th)
+
+		assertForeground(t, got, 1, 0, th.SynKeyword)
+	})
+}
+
+// TestHighlight_MarkdownNonMarkdown keeps Markdown
 // punctuation from being recolored in unrelated file types.
-func TestHighlight_MarkdownStructuralStylesDoNotApplyToTextFiles(t *testing.T) {
+func TestHighlight_MarkdownNonMarkdown(t *testing.T) {
 	th := theme.Default()
 	got := Highlight("notes.txt", "# Title\n```go\n", th)
 	base := tcell.StyleDefault.Background(th.BG).Foreground(th.Text)
