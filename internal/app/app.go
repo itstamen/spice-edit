@@ -393,6 +393,8 @@ type App struct {
 
 	clipBuf      string
 	copyToSystem func(string) error
+	pasting      bool
+	pasteBuf     strings.Builder
 	statusMsg    string
 	statusUntil  time.Time
 	openPath     pathOpener
@@ -543,6 +545,7 @@ func New(rootDir string) (*App, error) {
 		return nil, err
 	}
 	scr.EnableMouse(tcell.MouseButtonEvents | tcell.MouseDragEvents | tcell.MouseMotionEvents)
+	scr.EnablePaste()
 
 	th := theme.Default()
 	scr.SetStyle(tcell.StyleDefault.Background(th.BG).Foreground(th.Text))
@@ -606,6 +609,7 @@ func NewSingleFile(filePath string) (*App, error) {
 		return nil, err
 	}
 	scr.EnableMouse(tcell.MouseButtonEvents | tcell.MouseDragEvents | tcell.MouseMotionEvents)
+	scr.EnablePaste()
 
 	th := theme.Default()
 	scr.SetStyle(tcell.StyleDefault.Background(th.BG).Foreground(th.Text))
@@ -1126,6 +1130,12 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.screen.Sync()
 	case *tcell.EventKey:
 		a.handleKey(e)
+	case *tcell.EventPaste:
+		if e.Start() {
+			a.beginPaste()
+		} else {
+			a.finishPaste()
+		}
 	case *tcell.EventMouse:
 		a.handleMouse(e)
 	case *autoScrollEvent:
@@ -1386,6 +1396,11 @@ func (a *App) menuModalRect() (x, y, w, h int) {
 // only "command" key is Esc, which closes the menu and acts as the leader
 // for the hotkey table in leader.go (Esc s = Save, Esc u = Undo, etc.).
 func (a *App) handleKey(ev *tcell.EventKey) {
+	if a.pasting {
+		a.appendPastedKey(ev)
+		return
+	}
+
 	// Secondary modals own the keyboard while they're up. Each handler
 	// understands Esc (cancel), Enter (submit / activate), and the keys
 	// relevant to its layout (text editing for the prompt, arrow keys for
@@ -1541,6 +1556,38 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	case tcell.KeyRune:
 		tab.InsertRune(ev.Rune())
 	}
+}
+
+// beginPaste starts collecting the key events tcell sends between bracketed
+// paste start and end markers, without dispatching them as editor commands.
+func (a *App) beginPaste() {
+	a.pasting = true
+	a.pasteBuf.Reset()
+	a.lastEscape = time.Time{}
+}
+
+// appendPastedKey converts text-like terminal key events into the paste
+// buffer. Navigation and command keys are deliberately ignored.
+func (a *App) appendPastedKey(ev *tcell.EventKey) {
+	switch ev.Key() {
+	case tcell.KeyRune:
+		a.pasteBuf.WriteRune(ev.Rune())
+	case tcell.KeyEnter, tcell.KeyCtrlM:
+		a.pasteBuf.WriteByte('\r')
+	case tcell.KeyCtrlJ:
+		a.pasteBuf.WriteByte('\n')
+	case tcell.KeyTab:
+		a.pasteBuf.WriteByte('\t')
+	}
+}
+
+// finishPaste ends bracketed paste capture before inserting the entire
+// payload, making the terminal paste a single structural undo operation.
+func (a *App) finishPaste() {
+	text := a.pasteBuf.String()
+	a.pasting = false
+	a.pasteBuf.Reset()
+	a.insertPastedText(text)
 }
 
 // -----------------------------------------------------------------------------
@@ -2567,15 +2614,34 @@ func (a *App) cutSelection() {
 // We can't read the system clipboard from a TUI, so external pastes have
 // to come in through the user's terminal paste (Cmd-V / right-click paste).
 func (a *App) pasteClipboard() {
-	tab := a.activeTabPtr()
-	if tab == nil || tab.IsReadOnly() {
+	if tab := a.activeTabPtr(); tab == nil || tab.IsReadOnly() {
 		return
 	}
 	if a.clipBuf == "" {
 		a.flash("Internal clipboard empty — paste from your terminal (Cmd-V)")
 		return
 	}
-	tab.InsertString(a.clipBuf)
+	a.insertPastedText(a.clipBuf)
+}
+
+// normalizePastedText maps terminal and clipboard newline variants to LF so
+// Buffer.InsertString receives the same text regardless of paste origin.
+func normalizePastedText(text string) string {
+	return strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(text)
+}
+
+// insertPastedText normalizes text and inserts it as one structural editor
+// operation when the active tab is writable.
+func (a *App) insertPastedText(text string) {
+	tab := a.activeTabPtr()
+	if tab == nil || tab.IsReadOnly() {
+		return
+	}
+	text = normalizePastedText(text)
+	if text == "" {
+		return
+	}
+	tab.InsertString(text)
 }
 
 // -----------------------------------------------------------------------------

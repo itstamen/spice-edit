@@ -155,6 +155,51 @@ func TestEventCanShareFrame(t *testing.T) {
 	}
 }
 
+// TestHandleEvent_BracketedPaste collects terminal paste keys until the end
+// marker, then inserts the normalized payload as one undoable operation.
+func TestHandleEvent_BracketedPaste(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	tab, err := editor.NewTab("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tab.IndentUnit = "  "
+	a.tabs = []*editor.Tab{tab}
+	a.clipBuf = "leader action must not run"
+
+	a.handleEvent(tcell.NewEventPaste(true))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyCtrlJ, 0, tcell.ModNone))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'b', tcell.ModNone))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyEsc, 0, tcell.ModNone))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'v', tcell.ModNone))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'c', tcell.ModNone))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyCtrlM, 0, tcell.ModNone))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyCtrlJ, 0, tcell.ModNone))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'd', tcell.ModNone))
+
+	if got := tab.Buffer.String(); got != "" {
+		t.Fatalf("buffer mutated before paste end: %q", got)
+	}
+	if !a.lastEscape.IsZero() {
+		t.Fatal("pasted Esc sequence armed a leader action")
+	}
+
+	a.handleEvent(tcell.NewEventPaste(false))
+
+	if got := tab.Buffer.String(); got != "a\n\tbvc\nd" {
+		t.Fatalf("buffer = %q, want exact pasted text", got)
+	}
+	if !tab.Undo() {
+		t.Fatal("paste should be one undoable insertion")
+	}
+	if got := tab.Buffer.String(); got != "" {
+		t.Fatalf("undo buffer = %q, want initial state", got)
+	}
+}
+
 // TestProcessEventBurstPreservesEditingAndSelection ensures batching changes
 // only frame frequency, not editor state transitions.
 func TestProcessEventBurstPreservesEditingAndSelection(t *testing.T) {

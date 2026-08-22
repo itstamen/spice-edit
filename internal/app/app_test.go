@@ -919,6 +919,35 @@ func TestCopyCutPaste(t *testing.T) {
 	a.pasteClipboard()
 }
 
+// TestNormalizePastedText collapses terminal and clipboard newline variants
+// into the editor's canonical LF representation.
+func TestNormalizePastedText(t *testing.T) {
+	if got := normalizePastedText("a\r\nb\rc\nd"); got != "a\nb\nc\nd" {
+		t.Fatalf("normalized = %q", got)
+	}
+}
+
+// TestPasteClipboard_NormalizesNewlines keeps internal and terminal pastes on
+// the same insertion path so copied CRLF text does not leave stray CR bytes.
+func TestPasteClipboard_NormalizesNewlines(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	tab, err := editor.NewTab("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.tabs = []*editor.Tab{tab}
+	a.clipBuf = "a\r\nb\rc"
+
+	a.pasteClipboard()
+
+	if got := tab.Buffer.String(); got != "a\nb\nc" {
+		t.Fatalf("buffer = %q, want normalized clipboard text", got)
+	}
+	if got := tab.Buffer.LineCount(); got != 3 {
+		t.Fatalf("line count = %d, want 3", got)
+	}
+}
+
 // TestMenuSelectAll_SelectsEditableTextWithoutCopy verifies Select All only
 // selects the editable buffer and leaves both clipboard channels untouched.
 func TestMenuSelectAll_SelectsEditableTextWithoutCopy(t *testing.T) {
@@ -1482,6 +1511,23 @@ func TestHandleKey_RoutesToActiveTab(t *testing.T) {
 	a.handleKey(keyEv(tcell.KeyPgUp, 0))
 	a.handleKey(keyEv(tcell.KeyPgDn, 0))
 	a.handleKey(keyEv(tcell.KeyDelete, 0))
+}
+
+// TestHandleKey_EnterOutsidePaste confirms ordinary key handling remains
+// immediate when no bracketed paste capture is active.
+func TestHandleKey_EnterOutsidePaste(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	tab, err := editor.NewTab("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.tabs = []*editor.Tab{tab}
+
+	a.handleKey(keyEv(tcell.KeyEnter, 0))
+
+	if got := tab.Buffer.String(); got != "\n" {
+		t.Fatalf("buffer = %q, want immediate newline", got)
+	}
 }
 
 // TestHandleEvent_Resize updates width/height.
