@@ -12,18 +12,24 @@
 // terminal we care about — iTerm2, WezTerm, Kitty, Alacritty, Ghostty,
 // gnome-terminal, the macOS default — honors it.
 //
-// We deliberately do not try to read the system clipboard from a TUI:
-// most terminals refuse to expose it for security reasons. Paste from
-// outside the editor instead arrives via the user's terminal paste
-// (Cmd-V / right-click), which delivers the text as keypresses; we
-// handle those in the normal key-input path.
+// ReadSystem supports direct system-clipboard reads only on macOS, where
+// pbpaste is available. Other platforms return an unsupported-platform error.
 package clipboard
 
 import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 )
+
+// runCommand executes a command and returns its standard output. It is a
+// package variable so clipboard command behavior can be tested without
+// depending on a host clipboard utility.
+var runCommand = func(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).Output()
+}
 
 // CopyToSystem pushes text onto the host system clipboard via OSC 52.
 //
@@ -47,4 +53,17 @@ func CopyToSystem(text string) error {
 	}
 	_, err = f.WriteString(seq)
 	return err
+}
+
+// ReadSystem reads the host system clipboard on macOS via pbpaste.
+func ReadSystem() (string, error) {
+	if runtime.GOOS != "darwin" {
+		return "", fmt.Errorf("system clipboard read unsupported on %s", runtime.GOOS)
+	}
+
+	out, err := runCommand("pbpaste")
+	if err != nil {
+		return "", fmt.Errorf("read system clipboard via pbpaste: %w", err)
+	}
+	return string(out), nil
 }

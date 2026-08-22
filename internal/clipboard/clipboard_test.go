@@ -18,8 +18,95 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"runtime"
+	"strings"
 	"testing"
 )
+
+// TestReadSystem_ReturnsCommandOutput verifies clipboard bytes are returned
+// unchanged, including trailing newlines.
+func TestReadSystem_ReturnsCommandOutput(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("ReadSystem invokes pbpaste only on macOS")
+	}
+
+	original := runCommand
+	t.Cleanup(func() { runCommand = original })
+	var gotName string
+	var gotArgs []string
+	runCommand = func(name string, args ...string) ([]byte, error) {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		return []byte("line one\nline two\n"), nil
+	}
+
+	got, err := ReadSystem()
+	if err != nil {
+		t.Fatalf("ReadSystem() error = %v", err)
+	}
+	if got != "line one\nline two\n" {
+		t.Fatalf("ReadSystem() = %q, want command output unchanged", got)
+	}
+	if gotName != "pbpaste" || len(gotArgs) != 0 {
+		t.Fatalf("runCommand called with %q %v, want pbpaste with no args", gotName, gotArgs)
+	}
+}
+
+// TestReadSystem_PropagatesCommandFailure verifies command failures retain
+// their cause and include system-clipboard context.
+func TestReadSystem_PropagatesCommandFailure(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("ReadSystem invokes pbpaste only on macOS")
+	}
+
+	original := runCommand
+	t.Cleanup(func() { runCommand = original })
+	wantErr := fmt.Errorf("pbpaste unavailable")
+	runCommand = func(name string, args ...string) ([]byte, error) {
+		return nil, wantErr
+	}
+
+	_, err := ReadSystem()
+	if err == nil {
+		t.Fatal("ReadSystem() error = nil, want command failure")
+	}
+	if !strings.Contains(err.Error(), "read system clipboard via pbpaste") {
+		t.Fatalf("ReadSystem() error = %q, want system-clipboard context", err)
+	}
+	if !strings.Contains(err.Error(), wantErr.Error()) {
+		t.Fatalf("ReadSystem() error = %q, want underlying failure", err)
+	}
+}
+
+// TestReadSystem_UnsupportedPlatform verifies non-macOS hosts reject the
+// operation before attempting to invoke pbpaste.
+func TestReadSystem_UnsupportedPlatform(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("test covers non-Darwin platform selection")
+	}
+
+	original := runCommand
+	t.Cleanup(func() { runCommand = original })
+	called := false
+	runCommand = func(name string, args ...string) ([]byte, error) {
+		called = true
+		return nil, nil
+	}
+
+	got, err := ReadSystem()
+	if got != "" {
+		t.Fatalf("ReadSystem() text = %q, want empty text", got)
+	}
+	if err == nil {
+		t.Fatal("ReadSystem() error = nil, want unsupported-platform error")
+	}
+	if called {
+		t.Fatal("ReadSystem() attempted pbpaste on unsupported platform")
+	}
+	if !strings.Contains(err.Error(), "system clipboard read unsupported on "+runtime.GOOS) {
+		t.Fatalf("ReadSystem() error = %q, want platform context", err)
+	}
+}
 
 // expectedOSC52 reproduces the byte sequence CopyToSystem is contractually
 // required to emit for a given input and TMUX state. Keeping this in the
