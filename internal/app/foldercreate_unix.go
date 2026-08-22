@@ -33,7 +33,7 @@ func createFolder(path string) error {
 // child symlink. Every open and mkdir is relative to an already-open parent
 // descriptor, closing the Lstat/MkdirAll time-of-check/time-of-use gap.
 func createFolderAt(parent, name string) error {
-	fd, err := unix.Open(parent, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	fd, err := openUnixDirectoryAnchor(parent)
 	if err != nil {
 		return err
 	}
@@ -43,20 +43,8 @@ func createFolderAt(parent, name string) error {
 	for i, component := range components {
 		for {
 			next, openErr := unix.Openat(fd, component,
-				unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+				unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 			if openErr == nil {
-				var stat unix.Stat_t
-				if statErr := unix.Fstat(next, &stat); statErr != nil {
-					unix.Close(next)
-					return statErr
-				}
-				if stat.Mode&unix.S_IFMT != unix.S_IFDIR {
-					unix.Close(next)
-					if i == len(components)-1 {
-						return fmt.Errorf("a folder named %q already exists", filepath.Base(name))
-					}
-					return unix.ENOTDIR
-				}
 				if i == len(components)-1 {
 					unix.Close(next)
 					return fmt.Errorf("a folder named %q already exists", filepath.Base(name))
@@ -66,10 +54,7 @@ func createFolderAt(parent, name string) error {
 				break
 			}
 			if !errors.Is(openErr, unix.ENOENT) {
-				if errors.Is(openErr, unix.ELOOP) {
-					return fmt.Errorf("folder path cannot traverse symlink %q", component)
-				}
-				return openErr
+				return unixNoFollowDirectoryError(fd, component, openErr)
 			}
 			if mkdirErr := unix.Mkdirat(fd, component, 0o755); mkdirErr != nil {
 				if errors.Is(mkdirErr, unix.EEXIST) {
@@ -83,4 +68,47 @@ func createFolderAt(parent, name string) error {
 		}
 	}
 	return nil
+}
+
+// openUnixDirectoryAnchor resolves an absolute directory from the trusted
+// root descriptor without following any component symlink.
+func openUnixDirectoryAnchor(path string) (int, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return -1, err
+	}
+	fd, err := unix.Open(string(filepath.Separator), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, err
+	}
+	if abs == string(filepath.Separator) {
+		return fd, nil
+	}
+	for _, component := range strings.Split(strings.TrimPrefix(abs, string(filepath.Separator)), string(filepath.Separator)) {
+		next, openErr := unix.Openat(fd, component,
+			unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if openErr != nil {
+			err = unixNoFollowDirectoryError(fd, component, openErr)
+			unix.Close(fd)
+			return -1, err
+		}
+		unix.Close(fd)
+		fd = next
+	}
+	return fd, nil
+}
+
+// unixNoFollowDirectoryError preserves a clear symlink error when Darwin's
+// O_DIRECTORY|O_NOFOLLOW reports ENOTDIR for a refused symlink.
+func unixNoFollowDirectoryError(parentFD int, component string, openErr error) error {
+	if errors.Is(openErr, unix.ELOOP) {
+		return fmt.Errorf("folder path cannot traverse symlink %q", component)
+	}
+	if errors.Is(openErr, unix.ENOTDIR) {
+		var stat unix.Stat_t
+		if err := unix.Fstatat(parentFD, component, &stat, unix.AT_SYMLINK_NOFOLLOW); err == nil && stat.Mode&unix.S_IFMT == unix.S_IFLNK {
+			return fmt.Errorf("folder path cannot traverse symlink %q", component)
+		}
+	}
+	return openErr
 }

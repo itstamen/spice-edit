@@ -82,7 +82,11 @@ func folderCreateBase(path string) (parent, name string, err error) {
 			if !info.IsDir() {
 				return "", "", fmt.Errorf("%s is not a directory", parent)
 			}
-			return parent, name, nil
+			resolved, resolveErr := filepath.EvalSymlinks(parent)
+			if resolveErr != nil {
+				return "", "", resolveErr
+			}
+			return resolved, name, nil
 		}
 		if !os.IsNotExist(statErr) {
 			return "", "", statErr

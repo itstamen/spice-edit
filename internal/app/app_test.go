@@ -550,6 +550,11 @@ func TestNewFileLabel_TruncatesLongPaths(t *testing.T) {
 // nested directories when the submitted relative path is accepted.
 func TestMenuNewFolder(t *testing.T) {
 	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err != nil {
+		t.Fatalf("resolve root: %v", err)
+	} else {
+		root = resolved
+	}
 	active := filepath.Join(root, "work")
 	if err := os.Mkdir(active, 0o755); err != nil {
 		t.Fatalf("seed active folder: %v", err)

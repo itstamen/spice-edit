@@ -33,11 +33,7 @@ func createFolder(path string) error {
 // OBJ_DONT_REPARSE prevents child junctions and symlinks from redirecting the
 // operation outside the selected parent while a path is being created.
 func createFolderAt(parent, name string) error {
-	parentPath, err := filepath.Abs(parent)
-	if err != nil {
-		return err
-	}
-	fd, err := openWindowsDirectory(`\??\`+parentPath, 0, windows.FILE_OPEN, false)
+	fd, err := openWindowsDirectoryAnchor(parent)
 	if err != nil {
 		return err
 	}
@@ -82,6 +78,50 @@ func createFolderAt(parent, name string) error {
 		}
 	}
 	return nil
+}
+
+// openWindowsDirectoryAnchor resolves an absolute directory from the volume
+// root through no-reparse directory handles before child creation begins.
+func openWindowsDirectoryAnchor(path string) (windows.Handle, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return 0, err
+	}
+	volume := filepath.VolumeName(abs)
+	if volume == "" {
+		return 0, fmt.Errorf("folder path has no volume: %q", abs)
+	}
+	root := volume + string(filepath.Separator)
+	rel, err := filepath.Rel(root, abs)
+	if err != nil {
+		return 0, err
+	}
+	fd, err := openWindowsDirectory(windowsNTPath(root), 0, windows.FILE_OPEN, true)
+	if err != nil {
+		return 0, err
+	}
+	if rel == "." {
+		return fd, nil
+	}
+	for _, component := range strings.Split(rel, string(filepath.Separator)) {
+		next, openErr := openWindowsDirectory(component, fd, windows.FILE_OPEN, true)
+		if openErr != nil {
+			windows.CloseHandle(fd)
+			return 0, windowsNoReparseDirectoryError(component, openErr)
+		}
+		windows.CloseHandle(fd)
+		fd = next
+	}
+	return fd, nil
+}
+
+// windowsNTPath converts a DOS or UNC absolute path to the NT path form
+// NtCreateFile expects when no root directory handle is supplied.
+func windowsNTPath(path string) string {
+	if strings.HasPrefix(path, `\\`) {
+		return `\??\UNC\` + strings.TrimPrefix(path, `\\`)
+	}
+	return `\??\` + path
 }
 
 // openWindowsDirectory opens or creates name relative to root. A zero root
@@ -137,4 +177,13 @@ func windowsPathExists(err error) bool {
 // windowsPathReparse reports a reparse-point refusal from OBJ_DONT_REPARSE.
 func windowsPathReparse(err error) bool {
 	return err == windows.STATUS_STOPPED_ON_SYMLINK || err == windows.STATUS_REPARSE_POINT_ENCOUNTERED
+}
+
+// windowsNoReparseDirectoryError gives the user the same clear validation
+// message for a refused reparse point as the Unix no-follow traversal.
+func windowsNoReparseDirectoryError(component string, err error) error {
+	if windowsPathReparse(err) {
+		return fmt.Errorf("folder path cannot traverse symlink %q", component)
+	}
+	return err
 }
