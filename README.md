@@ -53,7 +53,9 @@ The goals, in order:
   to auto-scroll a selection. Completed mouse selections automatically copy
   to the system clipboard.
 - **Syntax highlighting** for dozens of languages via Chroma, with cached
-  rendering that keeps large-file navigation responsive.
+  rendering that keeps large-file navigation responsive. Markdown fenced code
+  blocks use their declared language (for example, `go`, `json`, or `bash`)
+  and remain visually distinct from surrounding prose.
 - **Correct CJK and Unicode layout** — Chinese, Japanese, Korean, and
   combining characters use their terminal cell widths in file names, editor
   content, menus, and prompts. Fixes [#39](https://github.com/cloudmanic/spice-edit/issues/39).
@@ -66,8 +68,10 @@ The goals, in order:
   you get a heads-up; if the file is deleted, the tab is flagged once.
 - **Toggleable, draggable sidebar** — show/hide the file tree from the
   menu, or drag the splitter to resize it.
-- **Clipboard over SSH** — OSC 52, including a `tmux` passthrough so
-  copy works from inside a tmux session on a remote host.
+- **Clipboard over SSH and macOS** — OSC 52, including a `tmux` passthrough
+  so copy works from inside a tmux session on a remote host. On macOS, Paste,
+  `Esc v`, and terminal `Command+V` prefer the current system clipboard;
+  terminal paste remains the fallback when it cannot be read locally.
 - **Format on save** — opt-in per-project via `.spiceedit/format.json`
   with a first-run trust prompt so cloning a repo never silently
   executes its commands. See [Format on save](#format-on-save).
@@ -203,6 +207,11 @@ within half a second tap one of the letters below.
 | `Esc r`     | Redo                 |
 | `Esc w`     | Close tab            |
 | `Esc q`     | Quit                 |
+| `Esc c`     | Copy selection       |
+| `Esc x`     | Cut selection        |
+| `Esc v`     | Paste                |
+| `Esc a`     | Select all           |
+| `Esc d`     | Delete current line  |
 | `Esc n`     | New file             |
 | `Esc o`     | Open with default app |
 | `Esc e`     | Show in file manager |
