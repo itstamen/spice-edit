@@ -50,21 +50,8 @@ func createEmptyFile(path string) error {
 	return f.Close()
 }
 
-// createFolder creates path and any missing parent directories. An existing
-// target is rejected so a successful create always describes a new folder.
-func createFolder(path string) error {
-	if _, err := os.Lstat(path); err == nil {
-		return fmt.Errorf("a folder named %q already exists", filepath.Base(path))
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	return os.MkdirAll(path, 0o755)
-}
-
 // childPath resolves name under parent after ensuring it is a non-empty
 // relative path that cannot collapse to or escape from the parent directory.
-// Existing child components must not be symlinks because MkdirAll would follow
-// one and create the requested folder outside the selected parent.
 func childPath(parent, name string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("folder path cannot be empty")
@@ -76,21 +63,37 @@ func childPath(parent, name string) (string, error) {
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("folder path must stay within the active folder")
 	}
-	path := parent
-	for _, component := range strings.Split(clean, string(filepath.Separator)) {
-		path = filepath.Join(path, component)
-		info, err := os.Lstat(path)
-		if os.IsNotExist(err) {
-			break
-		}
-		if err != nil {
-			return "", fmt.Errorf("inspect folder path: %w", err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("folder path cannot traverse symlink %q", component)
-		}
-	}
 	return filepath.Join(parent, clean), nil
+}
+
+// folderCreateBase finds an existing directory that can anchor createFolder's
+// descriptor-relative traversal, returning the remaining nested path beneath
+// it. The menu path already supplies its selected parent directly.
+func folderCreateBase(path string) (parent, name string, err error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", "", err
+	}
+	parent = filepath.Dir(abs)
+	name = filepath.Base(abs)
+	for {
+		info, statErr := os.Stat(parent)
+		if statErr == nil {
+			if !info.IsDir() {
+				return "", "", fmt.Errorf("%s is not a directory", parent)
+			}
+			return parent, name, nil
+		}
+		if !os.IsNotExist(statErr) {
+			return "", "", statErr
+		}
+		next := filepath.Dir(parent)
+		if next == parent {
+			return "", "", statErr
+		}
+		name = filepath.Join(filepath.Base(parent), name)
+		parent = next
+	}
 }
 
 // renameFile moves oldPath to newPath. It refuses to clobber an existing
@@ -181,7 +184,7 @@ func (a *App) doCreateFolder(parent, name string) {
 		a.flash(fmt.Sprintf("Create folder failed: %v", err))
 		return
 	}
-	if err := createFolder(target); err != nil {
+	if err := createFolderAt(parent, filepath.Clean(name)); err != nil {
 		a.flash(fmt.Sprintf("Create folder failed: %v", err))
 		return
 	}

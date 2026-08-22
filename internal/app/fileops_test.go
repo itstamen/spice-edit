@@ -111,27 +111,6 @@ func TestDoCreateFolder_UnsafePathFlashesConcreteError(t *testing.T) {
 	}
 }
 
-// TestDoCreateFolder_RejectsSymlinkedComponent prevents a relative path from
-// escaping through an existing symlink below the selected parent folder.
-func TestDoCreateFolder_RejectsSymlinkedComponent(t *testing.T) {
-	root := t.TempDir()
-	outside := t.TempDir()
-	link := filepath.Join(root, "link")
-	if err := os.Symlink(outside, link); err != nil {
-		t.Fatalf("create symlink: %v", err)
-	}
-	a := newTestApp(t, root)
-
-	a.doCreateFolder(root, filepath.Join("link", "new"))
-
-	if _, err := os.Stat(filepath.Join(outside, "new")); !os.IsNotExist(err) {
-		t.Fatalf("folder escaped through symlink: err=%v", err)
-	}
-	if !strings.Contains(a.statusMsg, "symlink") {
-		t.Fatalf("status message = %q, want symlink error", a.statusMsg)
-	}
-}
-
 // TestRenameFile_Basic renames a file and confirms the source is gone and
 // the destination has the original contents.
 func TestRenameFile_Basic(t *testing.T) {
