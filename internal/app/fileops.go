@@ -17,7 +17,7 @@
 //     the menu offers New File (creates a child) plus Rename / Delete; for
 //     files it offers Rename / Delete on the file itself.
 //
-// All three operations refresh the file tree afterwards so the sidebar
+// All four operations refresh the file tree afterwards so the sidebar
 // reflects the change immediately, without waiting for the 10-second
 // background poller.
 
@@ -63,6 +63,8 @@ func createFolder(path string) error {
 
 // childPath resolves name under parent after ensuring it is a non-empty
 // relative path that cannot collapse to or escape from the parent directory.
+// Existing child components must not be symlinks because MkdirAll would follow
+// one and create the requested folder outside the selected parent.
 func childPath(parent, name string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("folder path cannot be empty")
@@ -73,6 +75,20 @@ func childPath(parent, name string) (string, error) {
 	clean := filepath.Clean(name)
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("folder path must stay within the active folder")
+	}
+	path := parent
+	for _, component := range strings.Split(clean, string(filepath.Separator)) {
+		path = filepath.Join(path, component)
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("inspect folder path: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("folder path cannot traverse symlink %q", component)
+		}
 	}
 	return filepath.Join(parent, clean), nil
 }
