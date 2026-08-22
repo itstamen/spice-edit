@@ -208,6 +208,28 @@ func TestDeleteSelection_IsItsOwnStep(t *testing.T) {
 	}
 }
 
+// TestDeleteCurrentLines_UndoRestoresState ensures a whole-line deletion is
+// one structural step and restores both content and selection orientation.
+func TestDeleteCurrentLines_UndoRestoresState(t *testing.T) {
+	tab := newScratchTab("one\ntwo\nthree\nfour")
+	tab.Cursor = Position{Line: 2, Col: 1}
+	tab.Anchor = Position{Line: 1, Col: 2}
+	wantText := tab.Buffer.String()
+	wantCursor := tab.Cursor
+	wantAnchor := tab.Anchor
+
+	tab.DeleteCurrentLines()
+	if !tab.Undo() {
+		t.Fatal("expected delete undo to succeed")
+	}
+	if got := tab.Buffer.String(); got != wantText {
+		t.Fatalf("buffer after undo = %q, want %q", got, wantText)
+	}
+	if tab.Cursor != wantCursor || tab.Anchor != wantAnchor {
+		t.Fatalf("positions after undo = %+v / %+v, want %+v / %+v", tab.Cursor, tab.Anchor, wantCursor, wantAnchor)
+	}
+}
+
 // TestInsertRune_OverSelectionPushesOnce verifies that typing a char
 // while a selection is active pushes a single undo step (the
 // DeleteSelection one) and then replaces — so undoing once gives back

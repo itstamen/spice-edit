@@ -376,6 +376,66 @@ func TestTab_DeleteSelection_NoSelection(t *testing.T) {
 	}
 }
 
+// TestTab_DeleteCurrentLines removes the inclusive line range touched by the
+// cursor or selection and collapses the caret to the first remaining line.
+func TestTab_DeleteCurrentLines(t *testing.T) {
+	tests := []struct {
+		name     string
+		text     string
+		cursor   Position
+		anchor   Position
+		wantText string
+		wantPos  Position
+	}{
+		{"cursor", "one\ntwo\nthree", Position{Line: 1, Col: 1}, Position{Line: 1, Col: 1}, "one\nthree", Position{Line: 1, Col: 0}},
+		{"forward", "one\ntwo\nthree\nfour", Position{Line: 1, Col: 2}, Position{Line: 2, Col: 1}, "one\nfour", Position{Line: 1, Col: 0}},
+		{"reverse", "one\ntwo\nthree\nfour", Position{Line: 2, Col: 1}, Position{Line: 1, Col: 2}, "one\nfour", Position{Line: 1, Col: 0}},
+		{"last", "one\ntwo\nthree", Position{Line: 2, Col: 5}, Position{Line: 2, Col: 5}, "one\ntwo", Position{Line: 1, Col: 0}},
+		{"only", "one", Position{}, Position{}, "", Position{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tab := &Tab{Buffer: NewBuffer(tt.text), Cursor: tt.cursor, Anchor: tt.anchor}
+			tab.DeleteCurrentLines()
+			if got := tab.Buffer.String(); got != tt.wantText {
+				t.Fatalf("buffer = %q, want %q", got, tt.wantText)
+			}
+			if tab.Cursor != tt.wantPos || tab.Anchor != tt.wantPos {
+				t.Fatalf("positions = %+v / %+v, want %+v", tab.Cursor, tab.Anchor, tt.wantPos)
+			}
+			if !tab.Dirty {
+				t.Fatal("expected Dirty")
+			}
+			if !tab.cursorMoved {
+				t.Fatal("expected cursorMoved")
+			}
+		})
+	}
+}
+
+// TestTab_DeleteCurrentLines_ReadOnlyNoOp leaves read-only tabs untouched.
+func TestTab_DeleteCurrentLines_ReadOnlyNoOp(t *testing.T) {
+	tab := &Tab{
+		Buffer:      NewBuffer("one\ntwo"),
+		Cursor:      Position{Line: 1, Col: 1},
+		Anchor:      Position{Line: 0, Col: 1},
+		Mode:        externalMode,
+		Dirty:       true,
+		cursorMoved: true,
+	}
+	tab.DeleteCurrentLines()
+	if got := tab.Buffer.String(); got != "one\ntwo" {
+		t.Fatalf("buffer changed: %q", got)
+	}
+	if tab.Cursor != (Position{Line: 1, Col: 1}) || tab.Anchor != (Position{Line: 0, Col: 1}) {
+		t.Fatalf("positions changed: %+v / %+v", tab.Cursor, tab.Anchor)
+	}
+	if !tab.Dirty || !tab.cursorMoved {
+		t.Fatal("read-only no-op changed state")
+	}
+}
+
 // TestTab_InsertString_ReplacesSelection inserts text after first deleting
 // any active selection.
 func TestTab_InsertString_ReplacesSelection(t *testing.T) {

@@ -496,6 +496,36 @@ func (t *Tab) DeleteSelection() {
 	t.cursorMoved = true
 }
 
+// DeleteCurrentLines removes the line containing the cursor, or every line
+// touched by the current selection, and collapses the caret to the first
+// remaining line. No-op on read-only tabs.
+func (t *Tab) DeleteCurrentLines() {
+	if t.IsReadOnly() {
+		return
+	}
+	cursor := t.Buffer.Clamp(t.Cursor)
+	anchor := t.Buffer.Clamp(t.Anchor)
+	start, end := cursor.Line, cursor.Line
+	if anchor.Line < start {
+		start = anchor.Line
+	}
+	if anchor.Line > end {
+		end = anchor.Line
+	}
+
+	t.pushUndo(undoGroupStructural)
+	if start == 0 && end == t.Buffer.LineCount()-1 {
+		t.Buffer.Lines = []string{""}
+	} else {
+		t.Buffer.Lines = append(t.Buffer.Lines[:start], t.Buffer.Lines[end+1:]...)
+	}
+	pos := t.Buffer.Clamp(Position{Line: start, Col: 0})
+	t.Cursor, t.Anchor = pos, pos
+	t.Dirty = true
+	t.markTextChanged()
+	t.cursorMoved = true
+}
+
 // InsertString inserts s at the cursor (replacing any selection first) and
 // advances the cursor past the inserted text. Always recorded as a
 // structural undo step — pasted text or "\n" presses shouldn't merge
