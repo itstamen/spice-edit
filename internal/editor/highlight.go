@@ -18,10 +18,11 @@ import (
 	"github.com/cloudmanic/spice-edit/internal/theme"
 )
 
-// Highlight tokenises src using a Chroma lexer chosen by filename (falling
-// back to content-based detection, then to a plain-text lexer) and returns a
-// per-line slice of styles parallel to the buffer's lines: styles[i][j] is
-// the style for rune j on line i.
+// Highlight returns a per-line slice of styles parallel to the buffer's
+// lines: styles[i][j] is the style for rune j on line i. Non-Markdown files
+// use a Chroma lexer chosen by filename (falling back to content-based
+// detection, then to a plain-text lexer). Markdown starts from the text base
+// grid, adds structural styles, and lexes only recognized fenced-code bodies.
 //
 // Returning a per-rune style grid keeps the renderer simple — it just looks
 // up the style for each cell it draws — at the cost of some memory.
@@ -205,8 +206,9 @@ func styleForToken(tt chroma.TokenType, t theme.Theme, base tcell.Style) tcell.S
 	return base
 }
 
-// applyMarkdownStructuralStyles overlays Markdown document cues and fenced-code
-// syntax colors on top of Chroma's token grid.
+// applyMarkdownStructuralStyles overlays Markdown document cues on the base
+// text grid. Fenced bodies start with CodeText; recognized fence languages
+// receive nested Chroma syntax-color overlays.
 func applyMarkdownStructuralStyles(filename string, lines []string, styles [][]tcell.Style, t theme.Theme, base tcell.Style) {
 	if !isMarkdownFilename(filename) {
 		return

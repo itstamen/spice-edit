@@ -384,6 +384,33 @@ func TestHighlightVisible_MarkdownProseAndFencedCode(t *testing.T) {
 	}
 }
 
+func TestHighlightVisible_MarkdownOffsetRetainsFenceStyles(t *testing.T) {
+	th := theme.Default()
+	jsonLine := `{"name":"spice","count":42}`
+	prose := "visible prose"
+	lines := []string{"prefix", "```json", jsonLine, "```", prose, "suffix"}
+	got := HighlightVisible("README.md", lines, 2, 3, th)
+
+	if got[0] != nil || got[1] != nil || got[5] != nil {
+		t.Fatalf("off-screen rows were highlighted: %v %v %v", got[0], got[1], got[5])
+	}
+	foregroundAt := func(line, col int) tcell.Color {
+		fg, _, _ := got[line][col].Decompose()
+		return fg
+	}
+	if fg := foregroundAt(2, strings.Index(jsonLine, `"spice"`)); fg != th.SynString {
+		t.Fatalf("JSON string fg = %v, want SynString", fg)
+	}
+	if fg := foregroundAt(2, strings.Index(jsonLine, "42")); fg != th.SynNumber {
+		t.Fatalf("JSON number fg = %v, want SynNumber", fg)
+	}
+	for col := range []rune(prose) {
+		if fg := foregroundAt(4, col); fg != th.Text {
+			t.Fatalf("prose fg at col %d = %v, want Text", col, fg)
+		}
+	}
+}
+
 // TestHighlight_MarkdownNonMarkdown keeps Markdown
 // punctuation from being recolored in unrelated file types.
 func TestHighlight_MarkdownNonMarkdown(t *testing.T) {
