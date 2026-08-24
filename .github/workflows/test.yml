@@ -92,7 +92,9 @@ jobs:
       - name: Install GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          # Keep this in lockstep with release.yml so CI validates the exact
+          # release toolchain that still supports the brews publisher.
+          version: v2.15.4
           install-only: true
 
       - name: Check GoReleaser config

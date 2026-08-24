@@ -125,7 +125,9 @@ jobs:
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          # Keep this in lockstep with test.yml. v2.15.4 still supports the
+          # brews publisher needed for macOS and Linux Homebrew formulas.
+          version: v2.15.4
           args: release --clean
         env:
           # Same-repo brew formula push uses the default workflow token —
