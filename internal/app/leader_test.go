@@ -295,6 +295,7 @@ func TestHandleKey_LeaderClipboard(t *testing.T) {
 	}
 
 	a.clipBuf = "internal hello"
+	a.commandPasteRecent = func(time.Time) bool { return false }
 	a.readFromSystem = func() (string, error) { return "system hello", nil }
 	sendLeader(a, 'v')
 	if got := tab.Buffer.String(); got != "system hello" {
@@ -307,6 +308,26 @@ func TestHandleKey_LeaderClipboard(t *testing.T) {
 	}
 	if got := len(*copied); got != 2 {
 		t.Fatalf("Select All writes = %d, want 2", got)
+	}
+}
+
+// TestHandleKey_LeaderPasteUsesSystemClipboardWhenMonitorUnavailable proves
+// Esc-v keeps its explicit clipboard-reader behavior when terminal paste is
+// not authorized by the native monitor.
+func TestHandleKey_LeaderPasteUsesSystemClipboardWhenMonitorUnavailable(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	tab, err := editor.NewTab("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.tabs = []*editor.Tab{tab}
+	a.commandPasteRecent = func(time.Time) bool { return false }
+	a.readFromSystem = func() (string, error) { return "system hello", nil }
+
+	sendLeader(a, 'v')
+
+	if got := tab.Buffer.String(); got != "system hello" {
+		t.Fatalf("buffer = %q, want system clipboard text", got)
 	}
 }
 

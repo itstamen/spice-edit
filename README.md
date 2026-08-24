@@ -69,14 +69,15 @@ The goals, in order:
 - **Toggleable, draggable sidebar** — show/hide the file tree from the
   menu, or drag the splitter to resize it.
 - **Clipboard over SSH and macOS** — OSC 52, including a `tmux` passthrough
-  so copy works from inside a tmux session on a remote host. On macOS, Paste,
-  `Esc v`, and terminal `Command+V` prefer the current system clipboard;
-  terminal paste remains the fallback when it cannot be read locally.
+  so copy works from inside a tmux session on a remote host. On macOS,
+  `Command+V` inserts the terminal payload after Input Monitoring approval;
+  terminal paste not initiated by `Command+V` is ignored. The Paste menu and
+  `Esc v` read the current system clipboard.
 - **Format on save** — opt-in per-project via `.spiceedit/format.json`
   with a first-run trust prompt so cloning a repo never silently
   executes its commands. See [Format on save](#format-on-save).
-- **Single binary, no CGO** — cross-compiled for macOS, Linux, and
-  Windows on amd64 and arm64.
+- **Single-binary releases** — packaged for macOS, Linux, and Windows on
+  amd64 and arm64. Linux and Windows builds do not require cgo.
 
 <img width="2504" height="1726" alt="CleanShot 2026-04-29 at 23 32 22@2x" src="https://github.com/user-attachments/assets/d0dca3da-5ba7-474d-852e-832acde90ca4" />
 

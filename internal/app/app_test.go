@@ -50,17 +50,19 @@ func newTestApp(t *testing.T, root string) *App {
 		t.Fatalf("tree: %v", err)
 	}
 	a := &App{
-		screen:         scr,
-		copyToSystem:   func(string) error { return nil },
-		readFromSystem: clipboard.ReadSystem,
-		showFrame:      scr.Show,
-		theme:          theme.Default(),
-		rootDir:        tree.Root.Path,
-		rootAnchor:     mustResolveTestPath(t, tree.Root.Path),
-		tree:           tree,
-		hoveredMenuRow: -1,
-		sidebarShown:   true,
-		sidebarWidth:   defaultSidebarWidth,
+		screen:             scr,
+		copyToSystem:       func(string) error { return nil },
+		readFromSystem:     clipboard.ReadSystem,
+		commandPasteRecent: func(time.Time) bool { return false },
+		closeCommandPaste:  func() {},
+		showFrame:          scr.Show,
+		theme:              theme.Default(),
+		rootDir:            tree.Root.Path,
+		rootAnchor:         mustResolveTestPath(t, tree.Root.Path),
+		tree:               tree,
+		hoveredMenuRow:     -1,
+		sidebarShown:       true,
+		sidebarWidth:       defaultSidebarWidth,
 	}
 	a.setActiveFolder(tree.Root.Path)
 	a.width, a.height = scr.Size()
@@ -1095,10 +1097,11 @@ func TestPasteClipboard_NoTab(t *testing.T) {
 	a.pasteClipboard() // no tab — nothing to paste into.
 }
 
-// TestMenuPaste_UsesSystemClipboard verifies explicit menu paste ignores the
-// editor's internal copy buffer and inserts only the current system text.
-func TestMenuPaste_UsesSystemClipboard(t *testing.T) {
+// TestPasteClipboard_MenuUsesSystemClipboardWhenMonitorUnavailable verifies
+// explicit menu paste remains independent of terminal-paste authorization.
+func TestPasteClipboard_MenuUsesSystemClipboardWhenMonitorUnavailable(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
+	a.commandPasteRecent = func(time.Time) bool { return false }
 	tab, err := editor.NewTab("")
 	if err != nil {
 		t.Fatal(err)
@@ -1114,6 +1117,20 @@ func TestMenuPaste_UsesSystemClipboard(t *testing.T) {
 	}
 	if got := a.clipBuf; got != "internal text" {
 		t.Fatalf("clipBuf = %q, want retained internal text", got)
+	}
+}
+
+// TestCloseStopsCommandPaste releases the monitor hook before terminal
+// teardown and clears it so repeated Close calls remain safe.
+func TestCloseStopsCommandPaste(t *testing.T) {
+	calls := 0
+	a := &App{closeCommandPaste: func() { calls++ }}
+
+	a.Close()
+	a.Close()
+
+	if calls != 1 {
+		t.Fatalf("close command paste calls = %d, want 1", calls)
 	}
 }
 

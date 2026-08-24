@@ -30,6 +30,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/cloudmanic/spice-edit/internal/clipboard"
+	"github.com/cloudmanic/spice-edit/internal/commandpaste"
 	"github.com/cloudmanic/spice-edit/internal/customactions"
 	"github.com/cloudmanic/spice-edit/internal/editor"
 	"github.com/cloudmanic/spice-edit/internal/filetree"
@@ -396,18 +397,21 @@ type App struct {
 	// drag the splitter to change it within [minSidebarWidth, width-minEditorAfterDrag].
 	sidebarWidth int
 
-	clipBuf        string
-	copyToSystem   func(string) error
-	readFromSystem func() (string, error)
-	pasting        bool
-	pasteBuf       strings.Builder
-	statusMsg      string
-	statusUntil    time.Time
-	openPath       pathOpener
-	revealPath     pathRevealer
-	dragMode       string // "editor" while a drag-select is active.
-	lastClick      clickRecord
-	lastTabRects   []tabRect
+	clipBuf            string
+	copyToSystem       func(string) error
+	readFromSystem     func() (string, error)
+	commandPasteRecent func(time.Time) bool
+	closeCommandPaste  func()
+	pasting            bool
+	pasteAuthorized    bool
+	pasteBuf           strings.Builder
+	statusMsg          string
+	statusUntil        time.Time
+	openPath           pathOpener
+	revealPath         pathRevealer
+	dragMode           string // "editor" while a drag-select is active.
+	lastClick          clickRecord
+	lastTabRects       []tabRect
 
 	// lastShiftAt is the wall-clock time we last saw any mouse event
 	// carrying the Shift modifier. Some terminals (notably Zellij over
@@ -587,6 +591,7 @@ func New(rootDir string) (*App, error) {
 	a.refreshGitStatus()
 	a.loadCustomActions()
 	a.flash("Welcome — click a file to open · click  ≡  for the menu")
+	a.initializeCommandPaste()
 	a.startTreeRefresh()
 	// Kick off the project file index in the background so that by
 	// the time the user hits Esc-p (or ≡ → Find file) the modal can
@@ -659,7 +664,27 @@ func NewSingleFile(filePath string) (*App, error) {
 	// `git diff`), so single-file mode shows change bars on open without
 	// the whole-repo status or tree walk that New performs.
 	a.openFile(filePath)
+	a.initializeCommandPaste()
 	return a, nil
+}
+
+// initializeCommandPaste starts the native Command+V monitor when available
+// and installs no-op hooks when terminal paste cannot be authorized.
+func (a *App) initializeCommandPaste() {
+	monitor, err := commandpaste.Start()
+	if err != nil {
+		a.commandPasteRecent = func(time.Time) bool { return false }
+		a.closeCommandPaste = func() {}
+		if errors.Is(err, commandpaste.ErrPermissionDenied) {
+			a.flash("Command+V paste requires Input Monitoring permission")
+		} else {
+			a.flash("Command+V paste unavailable")
+		}
+		return
+	}
+
+	a.commandPasteRecent = monitor.Recent
+	a.closeCommandPaste = monitor.Close
 }
 
 // loadCustomActions reads the user's actions.json (if any) and stores
@@ -783,6 +808,10 @@ func (a *App) Close() {
 	a.stopTreeRefresh()
 	a.stopAutoScroll()
 	a.clearImageGraphics()
+	if a.closeCommandPaste != nil {
+		a.closeCommandPaste()
+		a.closeCommandPaste = nil
+	}
 	if a.screen != nil {
 		a.screen.Fini()
 	}
@@ -1582,6 +1611,7 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 // paste start and end markers, without dispatching them as editor commands.
 func (a *App) beginPaste() {
 	a.pasting = true
+	a.pasteAuthorized = a.commandPasteRecent != nil && a.commandPasteRecent(a.eventTime())
 	a.pasteBuf.Reset()
 	a.lastEscape = time.Time{}
 }
@@ -1601,23 +1631,18 @@ func (a *App) appendPastedKey(ev *tcell.EventKey) {
 	}
 }
 
-// finishPaste ends bracketed paste capture before routing the system clipboard
-// to the focused text input or editor. The captured terminal payload remains
-// a fallback for terminals that do not permit system clipboard reads.
+// finishPaste ends bracketed paste capture and routes only payload text that
+// was authorized when the terminal sent its paste-start marker.
 func (a *App) finishPaste() {
 	captured := a.pasteBuf.String()
+	accepted := a.pasteAuthorized
 	a.pasting = false
+	a.pasteAuthorized = false
 	a.pasteBuf.Reset()
-
-	readFromSystem := a.readFromSystem
-	if readFromSystem == nil {
-		readFromSystem = clipboard.ReadSystem
+	if !accepted || captured == "" {
+		return
 	}
-	text, err := readFromSystem()
-	if err != nil {
-		text = captured
-	}
-	a.routePastedText(text)
+	a.routePastedText(captured)
 }
 
 // -----------------------------------------------------------------------------

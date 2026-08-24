@@ -160,6 +160,7 @@ func TestEventCanShareFrame(t *testing.T) {
 // marker, then inserts the normalized payload as one undoable operation.
 func TestHandleEvent_BracketedPaste(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
+	a.commandPasteRecent = func(time.Time) bool { return true }
 	tab, err := editor.NewTab("")
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +168,10 @@ func TestHandleEvent_BracketedPaste(t *testing.T) {
 	tab.IndentUnit = "  "
 	a.tabs = []*editor.Tab{tab}
 	a.clipBuf = "leader action must not run"
-	a.readFromSystem = func() (string, error) { return "", fmt.Errorf("system clipboard unavailable") }
+	a.readFromSystem = func() (string, error) {
+		t.Fatal("terminal paste read system clipboard")
+		return "", nil
+	}
 
 	a.handleEvent(tcell.NewEventPaste(true))
 	a.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
@@ -202,35 +206,131 @@ func TestHandleEvent_BracketedPaste(t *testing.T) {
 	}
 }
 
-// TestHandleEvent_BracketedPastePrefersSystemClipboard makes bracketed paste
-// use the host clipboard when it is readable instead of the captured terminal
-// payload. This is important when a terminal transforms pasted key events.
-func TestHandleEvent_BracketedPastePrefersSystemClipboard(t *testing.T) {
+// TestHandleEvent_BracketedPasteWithoutCommandVIsDiscarded verifies terminal
+// payloads are ignored unless macOS observed the initiating Command+V.
+func TestHandleEvent_BracketedPasteWithoutCommandVIsDiscarded(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	tab, err := editor.NewTab("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	a.tabs = []*editor.Tab{tab}
-	a.readFromSystem = func() (string, error) { return "system\r\ntext", nil }
+	a.commandPasteRecent = func(time.Time) bool { return false }
+	calls := 0
+	a.readFromSystem = func() (string, error) {
+		calls++
+		return "clipboard", nil
+	}
 
 	a.handleEvent(tcell.NewEventPaste(true))
-	for _, r := range "captured" {
-		a.handleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
-	}
+	a.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'x', tcell.ModNone))
 	a.handleEvent(tcell.NewEventPaste(false))
 
-	if got := tab.Buffer.String(); got != "system\ntext" {
-		t.Fatalf("buffer = %q, want normalized system clipboard text", got)
+	if got := tab.Buffer.String(); got != "" {
+		t.Fatalf("buffer = %q, want discarded terminal payload", got)
+	}
+	if calls != 0 {
+		t.Fatalf("system clipboard calls = %d, want 0", calls)
+	}
+}
+
+// TestHandleEvent_BracketedPasteAfterCommandVUsesCapturedText verifies an
+// authorized terminal paste inserts only its captured and normalized payload.
+func TestHandleEvent_BracketedPasteAfterCommandVUsesCapturedText(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	tab, err := editor.NewTab("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.tabs = []*editor.Tab{tab}
+	a.commandPasteRecent = func(time.Time) bool { return true }
+	a.readFromSystem = func() (string, error) {
+		t.Fatal("terminal paste read system clipboard")
+		return "", nil
+	}
+
+	a.handleEvent(tcell.NewEventPaste(true))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyCtrlJ, 0, tcell.ModNone))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'b', tcell.ModNone))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyCtrlM, 0, tcell.ModNone))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'c', tcell.ModNone))
+	a.handleEvent(tcell.NewEventPaste(false))
+
+	if got := tab.Buffer.String(); got != "a\nb\nc" {
+		t.Fatalf("buffer = %q, want normalized captured text", got)
+	}
+	if got := tab.Buffer.LineCount(); got != 3 {
+		t.Fatalf("line count = %d, want 3", got)
+	}
+}
+
+// TestHandleEvent_BracketedPasteSnapshotsAuthorizationAtStart proves paste
+// completion cannot re-check authorization after the captured payload begins.
+func TestHandleEvent_BracketedPasteSnapshotsAuthorizationAtStart(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	tab, err := editor.NewTab("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.tabs = []*editor.Tab{tab}
+	now := time.Unix(10, 0)
+	a.eventNow = func() time.Time { return now }
+	calls := 0
+	a.commandPasteRecent = func(got time.Time) bool {
+		calls++
+		return calls == 1 && got.Equal(now)
+	}
+	a.readFromSystem = func() (string, error) {
+		t.Fatal("terminal paste read system clipboard")
+		return "", nil
+	}
+
+	a.handleEvent(tcell.NewEventPaste(true))
+	now = now.Add(time.Hour)
+	a.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'x', tcell.ModNone))
+	a.handleEvent(tcell.NewEventPaste(false))
+
+	if got := tab.Buffer.String(); got != "x" {
+		t.Fatalf("buffer = %q, want snapshotted authorized payload", got)
+	}
+	if calls != 1 {
+		t.Fatalf("authorization calls = %d, want 1 at paste start", calls)
+	}
+}
+
+// TestHandleEvent_BracketedPasteAuthorizedEmptyPayloadIsInert preserves the
+// no-op behavior for an accepted paste that contains no terminal text.
+func TestHandleEvent_BracketedPasteAuthorizedEmptyPayloadIsInert(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	tab, err := editor.NewTab("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tab.Buffer = editor.NewBuffer("keep")
+	a.tabs = []*editor.Tab{tab}
+	a.commandPasteRecent = func(time.Time) bool { return true }
+	a.readFromSystem = func() (string, error) {
+		t.Fatal("terminal paste read system clipboard")
+		return "", nil
+	}
+
+	a.handleEvent(tcell.NewEventPaste(true))
+	a.handleEvent(tcell.NewEventPaste(false))
+
+	if got := tab.Buffer.String(); got != "keep" {
+		t.Fatalf("buffer = %q, want unchanged", got)
 	}
 }
 
 // pasteEventText drives a complete bracketed-paste lifecycle through the app
 // event router, including command keys that must remain inert as pasted data.
-// It forces the captured-terminal fallback so its callers do not depend on
-// the host clipboard contents.
+// It authorizes captured terminal input and makes any system clipboard read a
+// hard failure because terminal paste must use only the captured payload.
 func pasteEventText(a *App, prefix, suffix string) {
-	a.readFromSystem = func() (string, error) { return "", fmt.Errorf("system clipboard unavailable") }
+	a.commandPasteRecent = func(time.Time) bool { return true }
+	a.readFromSystem = func() (string, error) { panic("terminal paste read system clipboard") }
 	a.handleEvent(tcell.NewEventPaste(true))
 	for _, r := range prefix {
 		a.handleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
