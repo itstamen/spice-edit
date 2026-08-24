@@ -44,6 +44,7 @@ func TestDefault_AllColorsSet(t *testing.T) {
 		{"Selection", th.Selection},
 		{"Modified", th.Modified},
 		{"Error", th.Error},
+		{"CodeText", th.CodeText},
 		{"FolderColor", th.FolderColor},
 		{"FileColor", th.FileColor},
 		{"SynKeyword", th.SynKeyword},
@@ -84,6 +85,8 @@ func TestDefault_ContrastInvariants(t *testing.T) {
 		{"BG vs SidebarBG", th.BG, th.SidebarBG},
 		// Selection block must stand out against the unselected background.
 		{"Selection vs BG", th.Selection, th.BG},
+		{"CodeText vs Text", th.CodeText, th.Text},
+		{"CodeText vs BG", th.CodeText, th.BG},
 	}
 
 	for _, c := range cases {

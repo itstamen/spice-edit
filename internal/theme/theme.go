@@ -52,6 +52,7 @@ type Theme struct {
 	FileColor   tcell.Color
 
 	// --- Syntax highlighting ---
+	CodeText    tcell.Color // Neutral base text inside fenced code blocks.
 	SynKeyword  tcell.Color
 	SynString   tcell.Color
 	SynNumber   tcell.Color
@@ -103,6 +104,7 @@ func Default() Theme {
 		FileColor:   tcell.NewRGBColor(0xa9, 0xb1, 0xd6),
 
 		// Syntax — Tokyo Night-ish.
+		CodeText:    tcell.NewRGBColor(0x8f, 0x98, 0xb8),
 		SynKeyword:  tcell.NewRGBColor(0xbb, 0x9a, 0xf7), // purple
 		SynString:   tcell.NewRGBColor(0x9e, 0xce, 0x6a), // green
 		SynNumber:   tcell.NewRGBColor(0xff, 0x9e, 0x64), // orange
