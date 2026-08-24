@@ -251,7 +251,8 @@ func TestHighlightVisibleWindowClampsEdges(t *testing.T) {
 // without changing the shape of the style grid.
 func TestHighlight_MarkdownStructuralStyles(t *testing.T) {
 	th := theme.Default()
-	src := "# Title\n## Section\n```go\nfmt.Println(1)\n```\nplain\n"
+	prose := "普通正文：保持主文本颜色"
+	src := "# Title\n## Section\n```go\nfmt.Println(1)\n```\n" + prose + "\n"
 	got := Highlight("README.md", src, th)
 
 	fgAt := func(line, col int) tcell.Color {
@@ -272,6 +273,11 @@ func TestHighlight_MarkdownStructuralStyles(t *testing.T) {
 	}
 	if fgAt(4, 0) != th.Muted {
 		t.Fatalf("closing fence fg = %v, want Muted", fgAt(4, 0))
+	}
+	for col := range []rune(prose) {
+		if fgAt(5, col) != th.Text {
+			t.Fatalf("prose fg at col %d = %v, want Text", col, fgAt(5, col))
+		}
 	}
 	if len(got[0]) != len([]rune("# Title")) {
 		t.Fatalf("heading row length changed: %d", len(got[0]))
@@ -315,17 +321,25 @@ func TestHighlight_MarkdownFencedCode(t *testing.T) {
 		src := "```\nplain text\n```\n```not-a-language\nunknown text\n```\n"
 		got := Highlight("README.md", src, th)
 
-		assertForeground(t, got, 1, 0, th.SynPunct)
-		assertForeground(t, got, 4, 0, th.SynPunct)
+		assertForeground(t, got, 1, 0, th.CodeText)
+		assertForeground(t, got, 4, 0, th.CodeText)
+	})
+
+	t.Run("Bash", func(t *testing.T) {
+		line := `echo "hello"`
+		src := "```bash\n" + line + "\n```\n"
+		got := Highlight("README.md", src, th)
+
+		assertForeground(t, got, 1, strings.Index(line, `"hello"`), th.SynString)
 	})
 
 	t.Run("FourBackticksRequireFourToClose", func(t *testing.T) {
 		src := "````\nbody one\n```\nbody two\n````\n"
 		got := Highlight("README.md", src, th)
 
-		assertForeground(t, got, 1, 0, th.SynPunct)
-		assertForeground(t, got, 2, 0, th.SynPunct)
-		assertForeground(t, got, 3, 0, th.SynPunct)
+		assertForeground(t, got, 1, 0, th.CodeText)
+		assertForeground(t, got, 2, 0, th.CodeText)
+		assertForeground(t, got, 3, 0, th.CodeText)
 		assertForeground(t, got, 4, 0, th.Muted)
 	})
 
@@ -344,6 +358,30 @@ func TestHighlight_MarkdownFencedCode(t *testing.T) {
 
 		assertForeground(t, got, 1, 0, th.SynKeyword)
 	})
+}
+
+func TestHighlightVisible_MarkdownProseAndFencedCode(t *testing.T) {
+	th := theme.Default()
+	prose := "普通正文"
+	jsonLine := `{"name":"spice","count":42}`
+	lines := []string{prose, "```json", jsonLine, "```"}
+	got := HighlightVisible("README.md", lines, 0, len(lines), th)
+
+	foregroundAt := func(line, col int) tcell.Color {
+		fg, _, _ := got[line][col].Decompose()
+		return fg
+	}
+	for col := range []rune(prose) {
+		if fg := foregroundAt(0, col); fg != th.Text {
+			t.Fatalf("prose fg at col %d = %v, want Text", col, fg)
+		}
+	}
+	if fg := foregroundAt(2, strings.Index(jsonLine, `"spice"`)); fg != th.SynString {
+		t.Fatalf("JSON string fg = %v, want SynString", fg)
+	}
+	if fg := foregroundAt(2, strings.Index(jsonLine, "42")); fg != th.SynNumber {
+		t.Fatalf("JSON number fg = %v, want SynNumber", fg)
+	}
 }
 
 // TestHighlight_MarkdownNonMarkdown keeps Markdown

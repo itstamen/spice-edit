@@ -53,9 +53,10 @@ The goals, in order:
   to auto-scroll a selection. Completed mouse selections automatically copy
   to the system clipboard.
 - **Syntax highlighting** for dozens of languages via Chroma, with cached
-  rendering that keeps large-file navigation responsive. Markdown fenced code
-  blocks use their declared language (for example, `go`, `json`, or `bash`)
-  and remain visually distinct from surrounding prose.
+  rendering that keeps large-file navigation responsive. Markdown prose uses
+  the primary text color; fenced code blocks use their declared language (for
+  example, `go`, `json`, or `bash`) for syntax colors, while unlabelled or
+  unknown fences use a distinct neutral code color without language guessing.
 - **Correct CJK and Unicode layout** — Chinese, Japanese, Korean, and
   combining characters use their terminal cell widths in file names, editor
   content, menus, and prompts. Fixes [#39](https://github.com/cloudmanic/spice-edit/issues/39).

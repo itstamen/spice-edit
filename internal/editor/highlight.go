@@ -97,13 +97,6 @@ func HighlightVisible(filename string, lines []string, startLine, height int, t 
 
 // highlightSource tokenises src and returns one style row per source line.
 func highlightSource(filename, src string, t theme.Theme) [][]tcell.Style {
-	lexer := lexers.Match(filename)
-	if lexer == nil {
-		lexer = lexers.Analyse(src)
-	}
-	if lexer == nil {
-		lexer = lexers.Fallback
-	}
 	base := tcell.StyleDefault.Background(t.BG).Foreground(t.Text)
 
 	// Pre-allocate a styles grid sized to the source. We seed every cell
@@ -111,8 +104,20 @@ func highlightSource(filename, src string, t theme.Theme) [][]tcell.Style {
 	lines := strings.Split(src, "\n")
 	styles := baseStyleGrid(lines, base)
 
+	if isMarkdownFilename(filename) {
+		applyMarkdownStructuralStyles(filename, lines, styles, t, base)
+		return styles
+	}
+
+	lexer := lexers.Match(filename)
+	if lexer == nil {
+		lexer = lexers.Analyse(src)
+	}
+	if lexer == nil {
+		lexer = lexers.Fallback
+	}
+
 	applyLexerOverlay(lexer, src, 0, styles, t, base)
-	applyMarkdownStructuralStyles(filename, lines, styles, t, base)
 	return styles
 }
 
@@ -213,7 +218,7 @@ func applyMarkdownStructuralStyles(filename string, lines []string, styles [][]t
 			return
 		}
 
-		codeBase := base.Foreground(t.SynPunct)
+		codeBase := base.Foreground(t.CodeText)
 		for i := bodyStart; i < end && i < len(styles); i++ {
 			styleRow(styles[i], codeBase)
 		}
