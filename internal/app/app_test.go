@@ -26,6 +26,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/cloudmanic/spice-edit/internal/clipboard"
+	"github.com/cloudmanic/spice-edit/internal/commandpaste"
 	"github.com/cloudmanic/spice-edit/internal/customactions"
 	"github.com/cloudmanic/spice-edit/internal/editor"
 	"github.com/cloudmanic/spice-edit/internal/filetree"
@@ -67,6 +68,60 @@ func newTestApp(t *testing.T, root string) *App {
 	a.setActiveFolder(tree.Root.Path)
 	a.width, a.height = scr.Size()
 	return a
+}
+
+// TestInitializeCommandPasteStartupFailures verifies native startup errors
+// install deny/no-op hooks and surface the one expected status message.
+func TestInitializeCommandPasteStartupFailures(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus string
+	}{
+		{
+			name:       "permission denied",
+			err:        fmt.Errorf("wrapped: %w", commandpaste.ErrPermissionDenied),
+			wantStatus: "Command+V paste requires Input Monitoring permission",
+		},
+		{
+			name:       "generic failure",
+			err:        errors.New("listener unavailable"),
+			wantStatus: "Command+V paste unavailable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &App{}
+			startCalls := 0
+			a.initializeCommandPaste(func() (commandpaste.Monitor, error) {
+				startCalls++
+				return nil, tt.err
+			})
+
+			if startCalls != 1 {
+				t.Fatalf("start calls = %d, want 1", startCalls)
+			}
+			if got := a.statusMsg; got != tt.wantStatus {
+				t.Fatalf("status = %q, want %q", got, tt.wantStatus)
+			}
+			if a.commandPasteRecent == nil {
+				t.Fatal("commandPasteRecent was not installed")
+			}
+			if a.commandPasteRecent(time.Now()) {
+				t.Fatal("failed monitor startup authorized terminal paste")
+			}
+			if a.closeCommandPaste == nil {
+				t.Fatal("closeCommandPaste was not installed")
+			}
+
+			a.Close()
+			a.Close()
+			if a.commandPasteRecent(time.Now()) {
+				t.Fatal("closed failed monitor authorized terminal paste")
+			}
+		})
+	}
 }
 
 // mustResolveTestPath returns a canonical existing path for app fixtures.

@@ -591,7 +591,7 @@ func New(rootDir string) (*App, error) {
 	a.refreshGitStatus()
 	a.loadCustomActions()
 	a.flash("Welcome — click a file to open · click  ≡  for the menu")
-	a.initializeCommandPaste()
+	a.initializeCommandPaste(commandpaste.Start)
 	a.startTreeRefresh()
 	// Kick off the project file index in the background so that by
 	// the time the user hits Esc-p (or ≡ → Find file) the modal can
@@ -664,14 +664,15 @@ func NewSingleFile(filePath string) (*App, error) {
 	// `git diff`), so single-file mode shows change bars on open without
 	// the whole-repo status or tree walk that New performs.
 	a.openFile(filePath)
-	a.initializeCommandPaste()
+	a.initializeCommandPaste(commandpaste.Start)
 	return a, nil
 }
 
-// initializeCommandPaste starts the native Command+V monitor when available
-// and installs no-op hooks when terminal paste cannot be authorized.
-func (a *App) initializeCommandPaste() {
-	monitor, err := commandpaste.Start()
+// initializeCommandPaste starts the supplied Command+V monitor and installs
+// no-op hooks when terminal paste cannot be authorized. Production
+// constructors supply commandpaste.Start; tests can inject startup failures.
+func (a *App) initializeCommandPaste(start func() (commandpaste.Monitor, error)) {
+	monitor, err := start()
 	if err != nil {
 		a.commandPasteRecent = func(time.Time) bool { return false }
 		a.closeCommandPaste = func() {}

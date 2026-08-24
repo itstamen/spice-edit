@@ -234,6 +234,39 @@ func TestHandleEvent_BracketedPasteWithoutCommandVIsDiscarded(t *testing.T) {
 	}
 }
 
+// TestHandleEvent_BracketedPasteWithoutCommandVLeavesTextInputUnchanged proves
+// an unauthorized terminal payload cannot mutate a focused single-line modal.
+func TestHandleEvent_BracketedPasteWithoutCommandVLeavesTextInputUnchanged(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.openPrompt("Name", "", "pre", nil)
+	a.commandPasteRecent = func(time.Time) bool { return false }
+	calls := 0
+	a.readFromSystem = func() (string, error) {
+		calls++
+		return "clipboard", nil
+	}
+
+	a.handleEvent(tcell.NewEventPaste(true))
+	for _, r := range "changed" {
+		a.handleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
+	}
+	a.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	a.handleEvent(tcell.NewEventPaste(false))
+
+	if got := string(a.promptValue); got != "pre" {
+		t.Fatalf("prompt value = %q, want unchanged", got)
+	}
+	if got := a.promptCursor; got != len([]rune("pre")) {
+		t.Fatalf("prompt cursor = %d, want %d", got, len([]rune("pre")))
+	}
+	if !a.promptOpen {
+		t.Fatal("unauthorized pasted Enter closed the prompt")
+	}
+	if calls != 0 {
+		t.Fatalf("system clipboard calls = %d, want 0", calls)
+	}
+}
+
 // TestHandleEvent_BracketedPasteAfterCommandVUsesCapturedText verifies an
 // authorized terminal paste inserts only its captured and normalized payload.
 func TestHandleEvent_BracketedPasteAfterCommandVUsesCapturedText(t *testing.T) {
