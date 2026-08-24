@@ -411,6 +411,67 @@ func TestHighlightVisible_MarkdownOffsetRetainsFenceStyles(t *testing.T) {
 	}
 }
 
+func TestHighlightVisible_MarkdownRecoversDeepFenceState(t *testing.T) {
+	th := theme.Default()
+
+	foregroundAt := func(styles [][]tcell.Style, line, col int) tcell.Color {
+		fg, _, _ := styles[line][col].Decompose()
+		return fg
+	}
+	assertTextRow := func(t *testing.T, styles [][]tcell.Style, line int, prose string) {
+		t.Helper()
+		for col := range []rune(prose) {
+			if fg := foregroundAt(styles, line, col); fg != th.Text {
+				t.Fatalf("prose fg at %d:%d = %v, want Text", line, col, fg)
+			}
+		}
+	}
+	deepBody := func(opener string) []string {
+		lines := []string{opener}
+		for range highlightLeadLines {
+			lines = append(lines, "fence body")
+		}
+		return lines
+	}
+
+	t.Run("RecognizedLanguage", func(t *testing.T) {
+		jsonLine := `{"name":"spice","count":42}`
+		prose := "after JSON fence"
+		lines := deepBody("```json")
+		lines = append(lines, jsonLine, "```", prose)
+		codeLine := len(lines) - 3
+		got := HighlightVisible("README.md", lines, codeLine, 3, th)
+
+		if got[0] != nil {
+			t.Fatalf("off-screen opener row was highlighted: %v", got[0])
+		}
+		if fg := foregroundAt(got, codeLine, strings.Index(jsonLine, `"spice"`)); fg != th.SynString {
+			t.Fatalf("JSON string fg = %v, want SynString", fg)
+		}
+		if fg := foregroundAt(got, codeLine, strings.Index(jsonLine, "42")); fg != th.SynNumber {
+			t.Fatalf("JSON number fg = %v, want SynNumber", fg)
+		}
+		assertTextRow(t, got, codeLine+2, prose)
+	})
+
+	t.Run("UnknownLanguage", func(t *testing.T) {
+		code := "unknown code"
+		prose := "after unknown fence"
+		lines := deepBody("```not-a-language")
+		lines = append(lines, code, "```", prose)
+		codeLine := len(lines) - 3
+		got := HighlightVisible("README.md", lines, codeLine, 3, th)
+
+		if got[0] != nil {
+			t.Fatalf("off-screen opener row was highlighted: %v", got[0])
+		}
+		if fg := foregroundAt(got, codeLine, 0); fg != th.CodeText {
+			t.Fatalf("unknown code fg = %v, want CodeText", fg)
+		}
+		assertTextRow(t, got, codeLine+2, prose)
+	})
+}
+
 // TestHighlight_MarkdownNonMarkdown keeps Markdown
 // punctuation from being recolored in unrelated file types.
 func TestHighlight_MarkdownNonMarkdown(t *testing.T) {
