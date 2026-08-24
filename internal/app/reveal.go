@@ -29,15 +29,23 @@ type revealDoneEvent struct {
 // When satisfies the tcell.Event interface.
 func (e *revealDoneEvent) When() time.Time { return e.when }
 
-// showInFileManager selects the active file or opens the project root when no
-// file-backed tab is active.
-func (a *App) showInFileManager() {
-	path := a.rootDir
-	selectFile := false
-	if tab := a.activeTabPtr(); tab != nil && tab.Path != "" {
-		path = tab.Path
-		selectFile = true
+// fileManagerRevealTarget resolves the directory or file represented by the
+// current project context. Project mode follows the active tree folder;
+// single-file mode preserves file-selection behavior.
+func (a *App) fileManagerRevealTarget() (string, bool) {
+	if a.tree != nil && a.activeFolder != "" {
+		return a.activeFolder, false
 	}
+	if tab := a.activeTabPtr(); tab != nil && tab.Path != "" {
+		return tab.Path, true
+	}
+	return a.rootDir, false
+}
+
+// showInFileManager opens the current project folder or selects the active
+// file when SpiceEdit is running without a project tree.
+func (a *App) showInFileManager() {
+	path, selectFile := a.fileManagerRevealTarget()
 	a.revealPathInFileManager(path, selectFile)
 }
 
