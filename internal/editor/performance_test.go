@@ -92,6 +92,26 @@ func BenchmarkHighlightVisibleWindowLargeFile(b *testing.B) {
 	th := theme.Default()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		highlightVisibleWindow("large.json", lines, 50000, 552, th)
+		highlightVisibleWindow("large.json", lines, 50000, 552, th, nil)
+	}
+}
+
+func BenchmarkHighlightVisibleWindowLargeMarkdown(b *testing.B) {
+	lines := make([]string, 100000)
+	lines[0] = "```json"
+	for i := 1; i < len(lines)-1; i++ {
+		lines[i] = fmt.Sprintf(`{"line": %d, "value": "text"}`, i)
+	}
+	lines[len(lines)-1] = "```"
+	fences := buildMarkdownFenceIndex(lines)
+	th := theme.Default()
+
+	for _, start := range []int{0, 50000, 99000} {
+		b.Run(fmt.Sprintf("line_%d", start), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				highlightVisibleWindow("large.md", lines, start, 552, th, fences)
+			}
+		})
 	}
 }

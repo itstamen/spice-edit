@@ -47,10 +47,9 @@ const highlightLeadLines = 256
 
 // highlightVisibleWindow returns only the requested style rows and their
 // absolute starting line. Tokenisation includes a bounded lead around the
-// requested range so multi-line lexer state can be reconstructed. Markdown
-// additionally scans preceding fence delimiters to seed a fence that began
-// before the bounded lead.
-func highlightVisibleWindow(filename string, lines []string, startLine, height int, t theme.Theme) (int, [][]tcell.Style) {
+// requested range so multi-line lexer state can be reconstructed. A cached
+// Markdown fence index keeps state recovery bounded to one checkpoint block.
+func highlightVisibleWindow(filename string, lines []string, startLine, height int, t theme.Theme, fenceIndex *markdownFenceIndex) (int, [][]tcell.Style) {
 	if height <= 0 || len(lines) == 0 || startLine >= len(lines) {
 		return 0, nil
 	}
@@ -77,7 +76,10 @@ func highlightVisibleWindow(filename string, lines []string, startLine, height i
 	src := strings.Join(lines[leadStart:leadEnd], "\n")
 	var initialFence *markdownFenceDescriptor
 	if isMarkdownFilename(filename) && leadStart > 0 {
-		initialFence = markdownActiveFence(lines[:leadStart])
+		if fenceIndex == nil || fenceIndex.lineCount != len(lines) {
+			fenceIndex = buildMarkdownFenceIndex(lines)
+		}
+		initialFence = fenceIndex.activeFenceAt(lines, leadStart)
 	}
 	leadStyles := highlightSourceWithMarkdownFence(filename, src, t, initialFence)
 	rows := make([][]tcell.Style, endLine-startLine)
@@ -95,7 +97,7 @@ func highlightVisibleWindow(filename string, lines []string, startLine, height i
 // outside Tab rendering. The editor itself caches relative windows instead.
 func HighlightVisible(filename string, lines []string, startLine, height int, t theme.Theme) [][]tcell.Style {
 	styles := make([][]tcell.Style, len(lines))
-	start, rows := highlightVisibleWindow(filename, lines, startLine, height, t)
+	start, rows := highlightVisibleWindow(filename, lines, startLine, height, t, nil)
 	if start < 0 || start >= len(styles) {
 		return styles
 	}
@@ -284,25 +286,77 @@ func applyMarkdownStructuralStyles(filename string, lines []string, styles [][]t
 	flushFenceBody(len(lines))
 }
 
-// markdownActiveFence returns the fence active after lines. It only scans
-// structural delimiters, so visible-window Markdown recovery does not expand
-// the bounded Chroma tokenisation range.
-func markdownActiveFence(lines []string) *markdownFenceDescriptor {
-	var activeFence *markdownFenceDescriptor
-	for _, line := range lines {
-		_, fence, _, _, _, isFence := markdownFence(line)
-		if activeFence != nil {
-			if isFence && fence.marker == activeFence.marker && fence.length >= activeFence.length {
-				activeFence = nil
-			}
-			continue
-		}
-		if isFence {
-			fenceCopy := fence
-			activeFence = &fenceCopy
-		}
+const markdownFenceCheckpointLines = highlightLeadLines
+
+// markdownFenceState is the structural fence state immediately before a line.
+type markdownFenceState struct {
+	active bool
+	fence  markdownFenceDescriptor
+}
+
+// markdownFenceIndex stores sparse fence-state checkpoints for one buffer
+// revision. A lookup scans at most markdownFenceCheckpointLines source rows.
+type markdownFenceIndex struct {
+	lineCount   int
+	checkpoints []markdownFenceState
+}
+
+// buildMarkdownFenceIndex scans fence delimiters once for a buffer revision.
+func buildMarkdownFenceIndex(lines []string) *markdownFenceIndex {
+	checkpointCount := len(lines)/markdownFenceCheckpointLines + 1
+	index := &markdownFenceIndex{
+		lineCount:   len(lines),
+		checkpoints: make([]markdownFenceState, checkpointCount),
 	}
-	return activeFence
+	var state markdownFenceState
+	for lineIdx, line := range lines {
+		if lineIdx%markdownFenceCheckpointLines == 0 {
+			index.checkpoints[lineIdx/markdownFenceCheckpointLines] = state
+		}
+		state = advanceMarkdownFenceState(state, line)
+	}
+	if len(lines)%markdownFenceCheckpointLines == 0 {
+		index.checkpoints[len(lines)/markdownFenceCheckpointLines] = state
+	}
+	return index
+}
+
+// activeFenceAt returns the fence active immediately before line.
+func (i *markdownFenceIndex) activeFenceAt(lines []string, line int) *markdownFenceDescriptor {
+	if i == nil || line <= 0 || len(i.checkpoints) == 0 {
+		return nil
+	}
+	if line > len(lines) {
+		line = len(lines)
+	}
+	checkpoint := line / markdownFenceCheckpointLines
+	if checkpoint >= len(i.checkpoints) {
+		checkpoint = len(i.checkpoints) - 1
+	}
+	state := i.checkpoints[checkpoint]
+	for lineIdx := checkpoint * markdownFenceCheckpointLines; lineIdx < line; lineIdx++ {
+		state = advanceMarkdownFenceState(state, lines[lineIdx])
+	}
+	if !state.active {
+		return nil
+	}
+	fenceCopy := state.fence
+	return &fenceCopy
+}
+
+// advanceMarkdownFenceState applies one delimiter line to a structural state.
+func advanceMarkdownFenceState(state markdownFenceState, line string) markdownFenceState {
+	_, fence, _, _, _, isFence := markdownFence(line)
+	if state.active {
+		if isFence && fence.marker == state.fence.marker && fence.length >= state.fence.length {
+			return markdownFenceState{}
+		}
+		return state
+	}
+	if isFence {
+		return markdownFenceState{active: true, fence: fence}
+	}
+	return state
 }
 
 // isMarkdownFilename reports whether filename should receive Markdown-specific

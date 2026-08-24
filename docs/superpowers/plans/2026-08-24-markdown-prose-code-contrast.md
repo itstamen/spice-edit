@@ -18,6 +18,8 @@
 - Unlabelled and unknown fences use `Theme.CodeText`; do not infer a language.
 - Non-Markdown syntax highlighting remains unchanged.
 - Keep the cached visible-window highlighting path intact.
+- Cache sparse Markdown fence checkpoints per `Tab.textRevision`; each
+  visible-window state lookup scans at most 256 structural lines.
 
 ---
 
@@ -246,3 +248,16 @@ Expected: all tests pass and `bin/spiceedit` is produced.
 git add README.md internal/editor/highlight.go internal/editor/highlight_test.go
 git commit -m "Separate Markdown prose and fenced code colors"
 ```
+
+---
+
+### Final Review Amendment: Bound Deep Markdown Fence Recovery
+
+The final review found that a correct deep-window recovery cannot rescan the
+entire prefix for every window. Implement sparse fence-state checkpoints in
+`internal/editor/highlight.go`, cache them per `Tab.textRevision` in
+`internal/editor/tab.go`, invalidate them from `markTextChanged`, and reuse
+the same index for highlight rebuilds and extensions. Add a cache lifecycle
+test in `internal/editor/tab_test.go` and a 100,000-line Markdown benchmark in
+`internal/editor/performance_test.go` that queries top, middle, and end
+windows with a prebuilt index.

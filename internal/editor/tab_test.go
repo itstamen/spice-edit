@@ -1430,6 +1430,45 @@ func highlightCacheScreen(t *testing.T) tcell.SimulationScreen {
 	return scr
 }
 
+// TestTabMarkdownFenceIndexCachedPerRevision keeps deep Markdown window
+// recovery from rebuilding its structural index during ordinary scrolling.
+func TestTabMarkdownFenceIndexCachedPerRevision(t *testing.T) {
+	lines := make([]string, 5000)
+	lines[0] = "```json"
+	for i := 1; i < len(lines)-1; i++ {
+		lines[i] = fmt.Sprintf(`{"line": %d}`, i)
+	}
+	lines[len(lines)-1] = "```"
+	tab := &Tab{
+		Path:       "large.md",
+		Buffer:     &Buffer{Lines: lines},
+		StyleStale: true,
+	}
+
+	first := tab.markdownFenceIndexForHighlight()
+	if first == nil {
+		t.Fatal("Markdown fence index was not built")
+	}
+	if active := first.activeFenceAt(lines, 4000); active == nil || active.language != "json" {
+		t.Fatalf("active fence at line 4000 = %#v, want json", active)
+	}
+	if second := tab.markdownFenceIndexForHighlight(); second != first {
+		t.Fatal("same text revision rebuilt Markdown fence index")
+	}
+
+	tab.markTextChanged()
+	if tab.markdownFences != nil {
+		t.Fatal("text mutation did not invalidate Markdown fence index")
+	}
+	rebuilt := tab.markdownFenceIndexForHighlight()
+	if rebuilt == nil || rebuilt == first {
+		t.Fatal("new text revision did not rebuild Markdown fence index")
+	}
+	if tab.markdownFenceRevision != tab.textRevision {
+		t.Fatalf("fence revision=%d, want text revision=%d", tab.markdownFenceRevision, tab.textRevision)
+	}
+}
+
 func TestTab_RenderReusesHighlightInsidePrefetchWindow(t *testing.T) {
 	tab := highlightCacheTestTab(5000)
 	scr := highlightCacheScreen(t)

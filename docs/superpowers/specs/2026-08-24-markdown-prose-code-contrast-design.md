@@ -59,6 +59,13 @@ continue through the existing filename/content lexer path unchanged.
 code structural pass will use it as the base for both fallback blocks and the
 default tokens emitted by a recognized nested lexer.
 
+For large Markdown files, `Tab` will cache sparse fence-state checkpoints for
+the current `textRevision`. Each visible-window request recovers its initial
+fence state from the nearest checkpoint and scans at most 256 structural lines;
+Chroma continues to receive only the bounded lead window. Text mutations
+invalidate the checkpoint index, while scrolling and highlight-window
+extensions reuse it.
+
 ## Tests
 
 Regression tests will verify that:
@@ -71,6 +78,8 @@ Regression tests will verify that:
 - unlabelled and unknown fences use `CodeText` uniformly;
 - non-Markdown syntax highlighting remains unchanged;
 - visible-window highlighting preserves the same behavior.
+- deep visible windows recover fences opened more than 256 lines earlier
+  without rescanning the entire file prefix on every request.
 
 ## Out of scope
 

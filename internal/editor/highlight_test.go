@@ -233,7 +233,7 @@ func TestHighlightVisibleWindowReturnsOnlyRequestedRows(t *testing.T) {
 	for i := range lines {
 		lines[i] = "{\"value\": 1}"
 	}
-	start, rows := highlightVisibleWindow("large.json", lines, 50000, 40, theme.Default())
+	start, rows := highlightVisibleWindow("large.json", lines, 50000, 40, theme.Default(), nil)
 	if start != 50000 || len(rows) != 40 {
 		t.Fatalf("start=%d rows=%d, want 50000/40", start, len(rows))
 	}
@@ -241,7 +241,7 @@ func TestHighlightVisibleWindowReturnsOnlyRequestedRows(t *testing.T) {
 
 func TestHighlightVisibleWindowClampsEdges(t *testing.T) {
 	lines := []string{"one", "two", "three"}
-	start, rows := highlightVisibleWindow("x.txt", lines, -4, 20, theme.Default())
+	start, rows := highlightVisibleWindow("x.txt", lines, -4, 20, theme.Default(), nil)
 	if start != 0 || len(rows) != 3 {
 		t.Fatalf("start=%d rows=%d, want 0/3", start, len(rows))
 	}
