@@ -12,11 +12,11 @@
 #      workflow uses that version as-is. Otherwise it auto-bumps the patch
 #      number, commits the change back to main with [skip ci], and pushes.
 #   2. Tags v<x.y.z> and pushes the tag.
-#   3. Runs goreleaser to cross-compile binaries (linux/darwin/windows ×
-#      amd64/arm64), package them, attach them to a GitHub Release, and
-#      push an updated Homebrew formula into Formula/ in this same repo
-#      (using the default GITHUB_TOKEN — no separate tap repo or PAT
-#      required).
+#   3. Runs goreleaser to build linux/darwin/windows binaries for amd64
+#      and arm64 (except windows/arm64), package them, attach them to a
+#      GitHub Release, and push an updated Homebrew formula into Formula/
+#      in this same repo (using the default GITHUB_TOKEN — no separate tap
+#      repo or PAT required).
 
 name: Release
 
@@ -46,7 +46,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -100,7 +100,8 @@ jobs:
           set -euo pipefail
           NEW="${{ steps.version.outputs.version }}"
 
-          sed -i -E "s/(const Version = )\"[0-9]+\.[0-9]+\.[0-9]+\"/\1\"$NEW\"/" internal/version/version.go
+          export NEW
+          perl -pi -e 's/(const Version = )"[0-9]+\.[0-9]+\.[0-9]+"/$1"$ENV{NEW}"/' internal/version/version.go
 
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

@@ -158,7 +158,7 @@
           </tr>
           <tr>
             <td class="col-axis">SSH-native</td>
-            <td class="col-spice">One static binary, OSC 52, tmux-safe.</td>
+            <td class="col-spice">One self-contained binary, OSC 52, tmux-safe.</td>
             <td class="col-other">Works, but clipboard needs effort.</td>
             <td class="col-other">Remote SSH plugin needs node on host.</td>
           </tr>
@@ -192,7 +192,7 @@
           <dt>Setup</dt><dd>Install, run.</dd>
           <dt>Curve</dt><dd>Click around. No curve.</dd>
           <dt>Mouse</dt><dd>First-class. Every action.</dd>
-          <dt>SSH</dt><dd>One static binary. OSC 52. tmux-safe.</dd>
+          <dt>SSH</dt><dd>One self-contained binary. OSC 52. tmux-safe.</dd>
           <dt>Weight</dt><dd>One Go binary, ~10 MB.</dd>
           <dt>Config</dt><dd>No config file. No dotfiles.</dd>
           <dt>Keymap</dt><dd>Esc-leader, no Ctrl conflicts.</dd>
@@ -250,7 +250,7 @@
       (dict "icon" "format" "title" "Format on save" "desc" "Drop <code>.spiceedit/format.json</code> in a repo. Map extensions to argv arrays — <code>gofmt</code>, <code>prettier</code>, <code>pint</code>, <code>ruff</code>, anything. SpiceEdit prompts once before running anything and re-prompts when the config changes. No shell, no injection surface.")
       (dict "icon" "tmux" "title" "SSH-native clipboard" "desc" "Copy uses OSC 52 with a tmux passthrough wrapper, so highlighting text on a remote box ends up in your local clipboard. Works in iTerm2, WezTerm, Kitty, Alacritty, Ghostty, gnome-terminal, and the macOS default.")
       (dict "icon" "actions" "title" "Custom actions" "desc" "Define shell-out actions in <code>~/.config/spiceedit/actions.json</code>. SpiceEdit exports <code>$FILE</code> and <code>$FILENAME</code> to a <code>sh -c</code> subshell. The killer use case: SSH into a server, click <em>Open on Laptop</em>, and your laptop opens the file you were just editing on the box.")
-      (dict "icon" "binary" "title" "One static binary" "desc" "No CGO, no runtime, no plugin manager, no language server requirement. Cross-compiled for macOS, Linux, and Windows on amd64 and arm64. <code>scp</code> it onto a box. Run it. That's the install.")
+      (dict "icon" "binary" "title" "One self-contained binary" "desc" "No bundled runtime, no plugin manager, no language server requirement. Linux and Windows releases are static and cgo-free; macOS uses a small native listener for Command+V. <code>scp</code> it onto a box. Run it. That's the install.")
       (dict "icon" "highlight" "title" "Syntax highlighting via Chroma" "desc" "Pure-Go tokenizer with a Tokyo Night-inspired palette. Picks a lexer by filename, falls back to content sniffing, then to plain text. Dozens of languages out of the box, no tree-sitter setup, no language servers to install.")
       (dict "icon" "keys" "title" "Esc-leader hotkeys" "desc" "Tap Esc, then a letter inside half a second. <code>Esc s</code> saves, <code>Esc p</code> finds a file, <code>Esc f</code> searches the buffer. No Ctrl+ shortcuts fighting tmux or your terminal. Double-tap Esc opens the action menu.")
     }}
@@ -311,7 +311,7 @@
     <div class="mt-16 card flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
       <div>
         <h3 class="text-2xl font-semibold mb-2" style="color: #fff;">Install in one line.</h3>
-        <p style="color: var(--color-text-soft);">No runtime. No setup. One static Go binary.</p>
+        <p style="color: var(--color-text-soft);">No bundled runtime. No setup. One self-contained Go binary.</p>
       </div>
       <div class="flex flex-col sm:flex-row gap-3">
         <a href="/#install" class="btn btn-primary">

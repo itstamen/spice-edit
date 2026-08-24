@@ -34,10 +34,10 @@ var (
 	_ Monitor = noopMonitor{}
 )
 
-// timestampMonitor stores the most recent Command+V observation as Unix
-// nanoseconds so callbacks and the app event loop do not need a mutex.
+// timestampMonitor atomically publishes the most recent Command+V observation
+// as an immutable time value so its monotonic clock reading is preserved.
 type timestampMonitor struct {
-	recordedAt atomic.Int64
+	recordedAt atomic.Pointer[time.Time]
 	closeOnce  sync.Once
 	closeFn    func()
 }
@@ -57,17 +57,17 @@ func newMonitorForTest() *timestampMonitor {
 
 // record stores the time of a physical Command+V observation.
 func (m *timestampMonitor) record(now time.Time) {
-	m.recordedAt.Store(now.UnixNano())
+	m.recordedAt.Store(&now)
 }
 
 // Recent reports whether Command+V was observed within the grace period.
 func (m *timestampMonitor) Recent(now time.Time) bool {
 	recordedAt := m.recordedAt.Load()
-	if recordedAt == 0 {
+	if recordedAt == nil {
 		return false
 	}
 
-	elapsed := now.Sub(time.Unix(0, recordedAt))
+	elapsed := now.Sub(*recordedAt)
 	return elapsed >= 0 && elapsed < commandPasteGracePeriod
 }
 

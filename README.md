@@ -38,8 +38,8 @@ The goals, in order:
 3. **SSH-friendly.** Copy uses OSC 52 escape sequences with a tmux
    passthrough wrapper, so highlighting text on a remote box still
    ends up in your local Mac clipboard.
-4. **One static binary.** No runtime, no plugin manager, no config
-   directory full of YAML. Drop it on a server and run it.
+4. **One self-contained binary.** No bundled runtime, no plugin manager,
+   no config directory full of YAML. Drop it on a server and run it.
 5. **Looks reasonable.** Tokyo Night-inspired palette out of the box,
    syntax highlighting via [chroma](https://github.com/alecthomas/chroma)
    (no CGO, no tree-sitter setup).
@@ -603,10 +603,11 @@ Releases are fully automated. Every push to `main`:
    manually). Otherwise the patch number is auto-bumped and committed
    back to `main` with `[skip ci]`.
 3. Tags `v<x.y.z>` and pushes the tag.
-4. [GoReleaser](https://goreleaser.com/) cross-compiles for
-   linux/darwin/windows × amd64/arm64, attaches archives to a GitHub
-   Release, and pushes an updated formula into `Formula/spice-edit.rb`
-   on this same repo.
+4. [GoReleaser](https://goreleaser.com/) builds Linux and macOS for amd64
+   and arm64 plus Windows for amd64, attaches archives to a GitHub Release,
+   and pushes an updated formula into `Formula/spice-edit.rb` on this same
+   repo. macOS builds use cgo for the native Command+V listener; Linux and
+   Windows builds remain cgo-free.
 
 No PAT, no separate tap repo — the default workflow `GITHUB_TOKEN` is
 enough since the formula lives in the source repo.

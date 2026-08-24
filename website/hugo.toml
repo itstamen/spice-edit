@@ -20,7 +20,7 @@ disableKinds = ["taxonomy", "term"]
     tabWidth = 2
 
 [params]
-  description = "A mouse-first terminal code editor for SSH workflows. One static Go binary, no setup."
+  description = "A mouse-first terminal code editor for SSH workflows. One self-contained Go binary, no setup."
   github_url = "https://github.com/cloudmanic/spice-edit"
   brew_tap = "cloudmanic/spice-edit"
   install_script_url = "https://raw.githubusercontent.com/cloudmanic/spice-edit/main/install.sh"

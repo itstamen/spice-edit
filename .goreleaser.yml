@@ -20,18 +20,28 @@ before:
     - go mod tidy
 
 builds:
-  - id: spiceedit
+  - id: spiceedit-static
     binary: spiceedit
     main: .
     env:
       - CGO_ENABLED=0
-    goos: [linux, darwin, windows]
+    goos: [linux, windows]
     goarch: [amd64, arm64]
     # Skip windows/arm64 — less common, and we'd rather not ship binaries
     # we can't easily test. Add it back if there's demand.
     ignore:
       - goos: windows
         goarch: arm64
+    ldflags:
+      - -s -w
+
+  - id: spiceedit-darwin
+    binary: spiceedit
+    main: .
+    env:
+      - CGO_ENABLED=1
+    goos: [darwin]
+    goarch: [amd64, arm64]
     ldflags:
       - -s -w
 

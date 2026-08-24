@@ -6,7 +6,7 @@ summary: "Install SpiceEdit on macOS, Linux, or Windows."
 weight: 10
 ---
 
-SpiceEdit ships as a single static Go binary. There is no runtime, no node, no language server, no setup. Pick the path that matches your platform.
+SpiceEdit ships as a single self-contained Go binary. There is no bundled runtime, no node, no language server, no setup. Pick the path that matches your platform.
 
 ## macOS (Homebrew)
 
@@ -85,7 +85,8 @@ cd spice-edit
 make install   # builds and installs to $GOPATH/bin
 ```
 
-Requires Go 1.22 or later. CGO is off by default — the build is fully static.
+Requires Go 1.22 or later. Linux and Windows release builds disable cgo;
+macOS builds use the system ApplicationServices framework for Command+V.
 
 ## Uninstall (manual)
 

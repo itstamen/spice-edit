@@ -12,7 +12,7 @@ Because the people who want vim already have vim, and the people who want SpiceE
 
 ## Why not tree-sitter?
 
-Tree-sitter requires CGO, per-language grammar packaging, and platform-specific build steps. SpiceEdit ships as a single static Go binary on purpose — drop it on a server, run it. Chroma gives you syntax highlighting in pure Go with zero setup. Highlighting is all SpiceEdit needs; structural editing is a feature for a different product.
+Tree-sitter requires per-language grammar packaging and platform-specific build steps. SpiceEdit keeps syntax highlighting pure Go so Linux and Windows releases remain static and cgo-free; macOS only uses cgo for its small native Command+V listener. Chroma provides highlighting with zero grammar setup. Structural editing is a feature for a different product.
 
 ## Why no config file?
 
