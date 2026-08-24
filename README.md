@@ -244,16 +244,22 @@ any file-backed text, image, or placeholder tab to the host operating system.
 Dirty text buffers are not saved first; the external application receives the
 current on-disk file.
 
-Press `Esc e` or choose **Show in file manager** to locate the active file in
-macOS Finder or Windows Explorer. On macOS, SpiceEdit searches every open
-Finder window and first activates an existing tab for an active file's
-containing folder. When the folder appears in multiple windows, it reuses the
-tab in Finder's frontmost window. When no matching tab exists, it opens the
-folder in a new tab of an existing Finder window; when Finder has no open
-window, SpiceEdit opens one. This requires Accessibility permission for the
-terminal application running SpiceEdit. Windows continues to select the active
-file in Explorer. If the active tab has no path, SpiceEdit opens the project
-root instead. This action is not supported on Linux.
+Press `Esc e` or choose **Show in file manager** to open the current project
+context in macOS Finder or Windows Explorer. In project mode, the action
+follows the left file tree: clicking a directory or the project root opens that
+directory, while clicking a file opens its containing directory. The selected
+tree context remains active even when a file tab is still visible. In
+single-file mode, SpiceEdit selects the active file instead.
+
+On macOS, SpiceEdit searches every open Finder window and first activates an
+existing tab for the target directory. When the folder appears in multiple
+windows, it reuses the tab in Finder's frontmost window. When no matching tab
+exists, it opens the folder in a new tab of an existing Finder window; when
+Finder has no open window, SpiceEdit opens one. This requires Accessibility
+permission for the terminal application running SpiceEdit. Windows uses the
+same project-directory context and continues to select the active file in
+single-file mode. If no tree context or file path is available, SpiceEdit opens
+the project root. This action is not supported on Linux.
 
 The handoff uses the native default-application mechanism on macOS and Windows.
 On Linux it requires `xdg-open` or `gio`. In an SSH session, the command runs

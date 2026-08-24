@@ -35,9 +35,113 @@ func TestMenuLayout_ShowInFileManager(t *testing.T) {
 	}
 }
 
-// TestShowInFileManager_UsesActiveFilePath verifies that every file-backed
-// tab mode asks the platform adapter to select the active file.
-func TestShowInFileManager_UsesActiveFilePath(t *testing.T) {
+// TestFileManagerRevealTarget_ProjectFolderWins verifies a directory selected
+// in the project tree remains authoritative even while a file tab is active.
+func TestFileManagerRevealTarget_ProjectFolderWins(t *testing.T) {
+	root := t.TempDir()
+	selected := filepath.Join(root, "selected")
+	if err := os.Mkdir(selected, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(root, "notes.txt")
+	if err := os.WriteFile(file, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tab, err := editor.NewTab(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a := newTestApp(t, root)
+	a.tabs = []*editor.Tab{tab}
+	a.activeTab = 0
+	a.setActiveFolder(selected)
+
+	path, selectFile := a.fileManagerRevealTarget()
+	if path != selected || selectFile {
+		t.Fatalf("target = %q selectFile=%v, want %q false", path, selectFile, selected)
+	}
+}
+
+// TestFileManagerRevealTarget_ProjectFileParent verifies opening a project
+// file makes its parent directory the Finder target.
+func TestFileManagerRevealTarget_ProjectFileParent(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "docs")
+	if err := os.Mkdir(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(parent, "guide.md")
+	if err := os.WriteFile(file, []byte("guide"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := newTestApp(t, root)
+	a.openFile(file)
+
+	path, selectFile := a.fileManagerRevealTarget()
+	if path != parent || selectFile {
+		t.Fatalf("target = %q selectFile=%v, want %q false", path, selectFile, parent)
+	}
+}
+
+// TestFileManagerRevealTarget_SingleFileUsesActiveFile preserves file-selection
+// behavior when no project tree exists.
+func TestFileManagerRevealTarget_SingleFileUsesActiveFile(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "notes.txt")
+	if err := os.WriteFile(file, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tab, err := editor.NewTab(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a := newTestApp(t, root)
+	a.tree = nil
+	a.tabs = []*editor.Tab{tab}
+	a.activeTab = 0
+
+	path, selectFile := a.fileManagerRevealTarget()
+	if path != file || !selectFile {
+		t.Fatalf("target = %q selectFile=%v, want %q true", path, selectFile, file)
+	}
+}
+
+// TestFileManagerRevealTarget_Fallbacks covers an empty project context and
+// the final project-root fallback.
+func TestFileManagerRevealTarget_Fallbacks(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "notes.txt")
+	if err := os.WriteFile(file, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tab, err := editor.NewTab(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a := newTestApp(t, root)
+	a.activeFolder = ""
+	a.tabs = []*editor.Tab{tab}
+	a.activeTab = 0
+	path, selectFile := a.fileManagerRevealTarget()
+	if path != file || !selectFile {
+		t.Fatalf("file fallback = %q selectFile=%v, want %q true", path, selectFile, file)
+	}
+
+	a.tabs = nil
+	a.activeTab = -1
+	path, selectFile = a.fileManagerRevealTarget()
+	if path != root || selectFile {
+		t.Fatalf("root fallback = %q selectFile=%v, want %q false", path, selectFile, root)
+	}
+}
+
+// TestShowInFileManager_SingleFileUsesActiveFilePath verifies that every
+// file-backed tab mode selects the active file when no project tree exists.
+func TestShowInFileManager_SingleFileUsesActiveFilePath(t *testing.T) {
 	dir := t.TempDir()
 	textPath := filepath.Join(dir, "notes.txt")
 	if err := os.WriteFile(textPath, []byte("hello"), 0o644); err != nil {
@@ -52,6 +156,7 @@ func TestShowInFileManager_UsesActiveFilePath(t *testing.T) {
 	for _, path := range []string{textPath, imagePath, externalPath} {
 		t.Run(filepath.Base(path), func(t *testing.T) {
 			a := newTestApp(t, dir)
+			a.tree = nil
 			tab, err := editor.NewTab(path)
 			if err != nil {
 				t.Fatal(err)
@@ -78,8 +183,8 @@ func TestShowInFileManager_UsesActiveFilePath(t *testing.T) {
 	}
 }
 
-// TestShowInFileManager_FallsBackToProjectRoot covers both no-tab and
-// untitled-tab states without consulting the sidebar's active folder.
+// TestShowInFileManager_FallsBackToProjectRoot covers an empty project context
+// with both no-tab and untitled-tab states.
 func TestShowInFileManager_FallsBackToProjectRoot(t *testing.T) {
 	for _, withUntitled := range []bool{false, true} {
 		name := "no tab"
@@ -97,7 +202,7 @@ func TestShowInFileManager_FallsBackToProjectRoot(t *testing.T) {
 				a.tabs = []*editor.Tab{tab}
 				a.activeTab = 0
 			}
-			a.activeFolder = filepath.Join(dir, "not-the-target")
+			a.activeFolder = ""
 			calls := make(chan revealCall, 1)
 			a.revealPath = func(path string, selectFile bool) error {
 				calls <- revealCall{path: path, selectFile: selectFile}

@@ -172,15 +172,20 @@ func TestHandleKey_LeaderOpenWithDefaultApp(t *testing.T) {
 }
 
 // TestHandleKey_LeaderShowInFileManager verifies Esc-e reaches the shared
-// reveal action and selects the active file.
+// reveal action and follows the selected project directory.
 func TestHandleKey_LeaderShowInFileManager(t *testing.T) {
 	dir := t.TempDir()
+	selected := filepath.Join(dir, "selected")
+	if err := os.Mkdir(selected, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	target := filepath.Join(dir, "notes.txt")
 	if err := os.WriteFile(target, []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	a := newTestApp(t, dir)
 	a.openFile(target)
+	a.setActiveFolder(selected)
 	calls := make(chan revealCall, 1)
 	a.revealPath = func(path string, selectFile bool) error {
 		calls <- revealCall{path: path, selectFile: selectFile}
@@ -192,8 +197,8 @@ func TestHandleKey_LeaderShowInFileManager(t *testing.T) {
 
 	select {
 	case got := <-calls:
-		if got.path != target || !got.selectFile {
-			t.Fatalf("reveal call = %#v, want path=%q select=true", got, target)
+		if got.path != selected || got.selectFile {
+			t.Fatalf("reveal call = %#v, want path=%q select=false", got, selected)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Esc-e did not invoke file manager reveal")
