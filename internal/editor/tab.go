@@ -91,6 +91,11 @@ type Tab struct {
 	highlightTheme    theme.Theme
 	hasHighlightTheme bool
 
+	// markdownFences is rebuilt once per text revision and reused by every
+	// highlight window so deep scrolling never rescans the full prefix.
+	markdownFences        *markdownFenceIndex
+	markdownFenceRevision uint64
+
 	// Mtime is the file's modification time as of the last successful
 	// read or write. The app's periodic disk-reconcile loop compares it
 	// against the live mtime to detect external edits.
@@ -266,7 +271,22 @@ func (t *Tab) invalidateWrapLayout() {
 func (t *Tab) markTextChanged() {
 	t.textRevision++
 	t.invalidateWrapLayout()
+	t.markdownFences = nil
 	t.StyleStale = true
+}
+
+// markdownFenceIndexForHighlight returns the fence checkpoints for the
+// current Markdown buffer revision. Non-Markdown tabs do not need an index.
+func (t *Tab) markdownFenceIndexForHighlight() *markdownFenceIndex {
+	if t.Buffer == nil || !isMarkdownFilename(t.Path) {
+		return nil
+	}
+	if t.markdownFences == nil || t.markdownFenceRevision != t.textRevision ||
+		t.markdownFences.lineCount != t.Buffer.LineCount() {
+		t.markdownFences = buildMarkdownFenceIndex(t.Buffer.Lines)
+		t.markdownFenceRevision = t.textRevision
+	}
+	return t.markdownFences
 }
 
 // highlightWindowBounds returns the bounded cache range around the viewport.
@@ -292,7 +312,7 @@ func (t *Tab) highlightWindowBounds(start, end int) (int, int) {
 // theme, or a non-overlapping viewport jump makes every old row unusable.
 func (t *Tab) rebuildHighlightWindow(start, end int, th theme.Theme) {
 	windowStart, rows := highlightVisibleWindow(
-		t.Path, t.Buffer.Lines, start, end-start, th,
+		t.Path, t.Buffer.Lines, start, end-start, th, t.markdownFenceIndexForHighlight(),
 	)
 	t.Styles = rows
 	t.highlightStart = windowStart
@@ -306,9 +326,10 @@ func (t *Tab) rebuildHighlightWindow(start, end int, th theme.Theme) {
 // back to the desired bounded range. Existing overlapping style rows remain
 // intact so visible text does not change colour at a cache boundary.
 func (t *Tab) extendHighlightWindow(start, end int, th theme.Theme) {
+	fenceIndex := t.markdownFenceIndexForHighlight()
 	if start < t.highlightStart {
 		_, leading := highlightVisibleWindow(
-			t.Path, t.Buffer.Lines, start, t.highlightStart-start, th,
+			t.Path, t.Buffer.Lines, start, t.highlightStart-start, th, fenceIndex,
 		)
 		rows := make([][]tcell.Style, 0, len(leading)+len(t.Styles))
 		rows = append(rows, leading...)
@@ -319,7 +340,7 @@ func (t *Tab) extendHighlightWindow(start, end int, th theme.Theme) {
 	if end > t.highlightEnd {
 		appendStart := t.highlightEnd
 		_, trailing := highlightVisibleWindow(
-			t.Path, t.Buffer.Lines, appendStart, end-appendStart, th,
+			t.Path, t.Buffer.Lines, appendStart, end-appendStart, th, fenceIndex,
 		)
 		t.Styles = append(t.Styles, trailing...)
 		t.highlightEnd = appendStart + len(trailing)

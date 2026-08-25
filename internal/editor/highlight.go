@@ -18,10 +18,11 @@ import (
 	"github.com/cloudmanic/spice-edit/internal/theme"
 )
 
-// Highlight tokenises src using a Chroma lexer chosen by filename (falling
-// back to content-based detection, then to a plain-text lexer) and returns a
-// per-line slice of styles parallel to the buffer's lines: styles[i][j] is
-// the style for rune j on line i.
+// Highlight returns a per-line slice of styles parallel to the buffer's
+// lines: styles[i][j] is the style for rune j on line i. Non-Markdown files
+// use a Chroma lexer chosen by filename (falling back to content-based
+// detection, then to a plain-text lexer). Markdown starts from the text base
+// grid, adds structural styles, and lexes only recognized fenced-code bodies.
 //
 // Returning a per-rune style grid keeps the renderer simple — it just looks
 // up the style for each cell it draws — at the cost of some memory.
@@ -46,8 +47,9 @@ const highlightLeadLines = 256
 
 // highlightVisibleWindow returns only the requested style rows and their
 // absolute starting line. Tokenisation includes a bounded lead around the
-// requested range so multi-line lexer state can be reconstructed.
-func highlightVisibleWindow(filename string, lines []string, startLine, height int, t theme.Theme) (int, [][]tcell.Style) {
+// requested range so multi-line lexer state can be reconstructed. A cached
+// Markdown fence index keeps state recovery bounded to one checkpoint block.
+func highlightVisibleWindow(filename string, lines []string, startLine, height int, t theme.Theme, fenceIndex *markdownFenceIndex) (int, [][]tcell.Style) {
 	if height <= 0 || len(lines) == 0 || startLine >= len(lines) {
 		return 0, nil
 	}
@@ -61,7 +63,8 @@ func highlightVisibleWindow(filename string, lines []string, startLine, height i
 	// Tokenise a bounded lead above and below the viewport. The upper lead
 	// lets the lexer re-enter comment / string state opened earlier; the
 	// lower lead closes blocks that end past the viewport. We keep only the
-	// visible rows; the lead rows are styled then dropped.
+	// visible rows; the lead rows are styled then dropped. Markdown fence
+	// state before this lead is recovered structurally without tokenising it.
 	leadStart := startLine - highlightLeadLines
 	if leadStart < 0 {
 		leadStart = 0
@@ -71,7 +74,14 @@ func highlightVisibleWindow(filename string, lines []string, startLine, height i
 		leadEnd = len(lines)
 	}
 	src := strings.Join(lines[leadStart:leadEnd], "\n")
-	leadStyles := highlightSource(filename, src, t)
+	var initialFence *markdownFenceDescriptor
+	if isMarkdownFilename(filename) && leadStart > 0 {
+		if fenceIndex == nil || fenceIndex.lineCount != len(lines) {
+			fenceIndex = buildMarkdownFenceIndex(lines)
+		}
+		initialFence = fenceIndex.activeFenceAt(lines, leadStart)
+	}
+	leadStyles := highlightSourceWithMarkdownFence(filename, src, t, initialFence)
 	rows := make([][]tcell.Style, endLine-startLine)
 	for i := startLine; i < endLine; i++ {
 		idx := i - leadStart
@@ -87,7 +97,7 @@ func highlightVisibleWindow(filename string, lines []string, startLine, height i
 // outside Tab rendering. The editor itself caches relative windows instead.
 func HighlightVisible(filename string, lines []string, startLine, height int, t theme.Theme) [][]tcell.Style {
 	styles := make([][]tcell.Style, len(lines))
-	start, rows := highlightVisibleWindow(filename, lines, startLine, height, t)
+	start, rows := highlightVisibleWindow(filename, lines, startLine, height, t, nil)
 	if start < 0 || start >= len(styles) {
 		return styles
 	}
@@ -95,15 +105,14 @@ func HighlightVisible(filename string, lines []string, startLine, height int, t 
 	return styles
 }
 
-// highlightSource tokenises src and returns one style row per source line.
+// highlightSource returns one style row per source line.
 func highlightSource(filename, src string, t theme.Theme) [][]tcell.Style {
-	lexer := lexers.Match(filename)
-	if lexer == nil {
-		lexer = lexers.Analyse(src)
-	}
-	if lexer == nil {
-		lexer = lexers.Fallback
-	}
+	return highlightSourceWithMarkdownFence(filename, src, t, nil)
+}
+
+// highlightSourceWithMarkdownFence tokenises src and returns one style row
+// per source line. initialFence seeds Markdown when src begins inside a fence.
+func highlightSourceWithMarkdownFence(filename, src string, t theme.Theme, initialFence *markdownFenceDescriptor) [][]tcell.Style {
 	base := tcell.StyleDefault.Background(t.BG).Foreground(t.Text)
 
 	// Pre-allocate a styles grid sized to the source. We seed every cell
@@ -111,8 +120,20 @@ func highlightSource(filename, src string, t theme.Theme) [][]tcell.Style {
 	lines := strings.Split(src, "\n")
 	styles := baseStyleGrid(lines, base)
 
+	if isMarkdownFilename(filename) {
+		applyMarkdownStructuralStyles(filename, lines, styles, t, base, initialFence)
+		return styles
+	}
+
+	lexer := lexers.Match(filename)
+	if lexer == nil {
+		lexer = lexers.Analyse(src)
+	}
+	if lexer == nil {
+		lexer = lexers.Fallback
+	}
+
 	applyLexerOverlay(lexer, src, 0, styles, t, base)
-	applyMarkdownStructuralStyles(filename, lines, styles, t, base)
 	return styles
 }
 
@@ -200,20 +221,26 @@ func styleForToken(tt chroma.TokenType, t theme.Theme, base tcell.Style) tcell.S
 	return base
 }
 
-// applyMarkdownStructuralStyles overlays Markdown document cues and fenced-code
-// syntax colors on top of Chroma's token grid.
-func applyMarkdownStructuralStyles(filename string, lines []string, styles [][]tcell.Style, t theme.Theme, base tcell.Style) {
+// applyMarkdownStructuralStyles overlays Markdown document cues on the base
+// text grid. Fenced bodies start with CodeText; recognized fence languages
+// receive nested Chroma syntax-color overlays. initialFence continues a fence
+// opened before the supplied lines.
+func applyMarkdownStructuralStyles(filename string, lines []string, styles [][]tcell.Style, t theme.Theme, base tcell.Style, initialFence *markdownFenceDescriptor) {
 	if !isMarkdownFilename(filename) {
 		return
 	}
 	var activeFence *markdownFenceDescriptor
+	if initialFence != nil {
+		fenceCopy := *initialFence
+		activeFence = &fenceCopy
+	}
 	bodyStart := 0
 	flushFenceBody := func(end int) {
 		if activeFence == nil || bodyStart >= end {
 			return
 		}
 
-		codeBase := base.Foreground(t.SynPunct)
+		codeBase := base.Foreground(t.CodeText)
 		for i := bodyStart; i < end && i < len(styles); i++ {
 			styleRow(styles[i], codeBase)
 		}
@@ -257,6 +284,79 @@ func applyMarkdownStructuralStyles(filename string, lines []string, styles [][]t
 		}
 	}
 	flushFenceBody(len(lines))
+}
+
+const markdownFenceCheckpointLines = highlightLeadLines
+
+// markdownFenceState is the structural fence state immediately before a line.
+type markdownFenceState struct {
+	active bool
+	fence  markdownFenceDescriptor
+}
+
+// markdownFenceIndex stores sparse fence-state checkpoints for one buffer
+// revision. A lookup scans at most markdownFenceCheckpointLines source rows.
+type markdownFenceIndex struct {
+	lineCount   int
+	checkpoints []markdownFenceState
+}
+
+// buildMarkdownFenceIndex scans fence delimiters once for a buffer revision.
+func buildMarkdownFenceIndex(lines []string) *markdownFenceIndex {
+	checkpointCount := len(lines)/markdownFenceCheckpointLines + 1
+	index := &markdownFenceIndex{
+		lineCount:   len(lines),
+		checkpoints: make([]markdownFenceState, checkpointCount),
+	}
+	var state markdownFenceState
+	for lineIdx, line := range lines {
+		if lineIdx%markdownFenceCheckpointLines == 0 {
+			index.checkpoints[lineIdx/markdownFenceCheckpointLines] = state
+		}
+		state = advanceMarkdownFenceState(state, line)
+	}
+	if len(lines)%markdownFenceCheckpointLines == 0 {
+		index.checkpoints[len(lines)/markdownFenceCheckpointLines] = state
+	}
+	return index
+}
+
+// activeFenceAt returns the fence active immediately before line.
+func (i *markdownFenceIndex) activeFenceAt(lines []string, line int) *markdownFenceDescriptor {
+	if i == nil || line <= 0 || len(i.checkpoints) == 0 {
+		return nil
+	}
+	if line > len(lines) {
+		line = len(lines)
+	}
+	checkpoint := line / markdownFenceCheckpointLines
+	if checkpoint >= len(i.checkpoints) {
+		checkpoint = len(i.checkpoints) - 1
+	}
+	state := i.checkpoints[checkpoint]
+	for lineIdx := checkpoint * markdownFenceCheckpointLines; lineIdx < line; lineIdx++ {
+		state = advanceMarkdownFenceState(state, lines[lineIdx])
+	}
+	if !state.active {
+		return nil
+	}
+	fenceCopy := state.fence
+	return &fenceCopy
+}
+
+// advanceMarkdownFenceState applies one delimiter line to a structural state.
+func advanceMarkdownFenceState(state markdownFenceState, line string) markdownFenceState {
+	_, fence, _, _, _, isFence := markdownFence(line)
+	if state.active {
+		if isFence && fence.marker == state.fence.marker && fence.length >= state.fence.length {
+			return markdownFenceState{}
+		}
+		return state
+	}
+	if isFence {
+		return markdownFenceState{active: true, fence: fence}
+	}
+	return state
 }
 
 // isMarkdownFilename reports whether filename should receive Markdown-specific

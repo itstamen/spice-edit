@@ -233,7 +233,7 @@ func TestHighlightVisibleWindowReturnsOnlyRequestedRows(t *testing.T) {
 	for i := range lines {
 		lines[i] = "{\"value\": 1}"
 	}
-	start, rows := highlightVisibleWindow("large.json", lines, 50000, 40, theme.Default())
+	start, rows := highlightVisibleWindow("large.json", lines, 50000, 40, theme.Default(), nil)
 	if start != 50000 || len(rows) != 40 {
 		t.Fatalf("start=%d rows=%d, want 50000/40", start, len(rows))
 	}
@@ -241,7 +241,7 @@ func TestHighlightVisibleWindowReturnsOnlyRequestedRows(t *testing.T) {
 
 func TestHighlightVisibleWindowClampsEdges(t *testing.T) {
 	lines := []string{"one", "two", "three"}
-	start, rows := highlightVisibleWindow("x.txt", lines, -4, 20, theme.Default())
+	start, rows := highlightVisibleWindow("x.txt", lines, -4, 20, theme.Default(), nil)
 	if start != 0 || len(rows) != 3 {
 		t.Fatalf("start=%d rows=%d, want 0/3", start, len(rows))
 	}
@@ -251,7 +251,8 @@ func TestHighlightVisibleWindowClampsEdges(t *testing.T) {
 // without changing the shape of the style grid.
 func TestHighlight_MarkdownStructuralStyles(t *testing.T) {
 	th := theme.Default()
-	src := "# Title\n## Section\n```go\nfmt.Println(1)\n```\nplain\n"
+	prose := "普通正文：保持主文本颜色"
+	src := "# Title\n## Section\n```go\nfmt.Println(1)\n```\n" + prose + "\n"
 	got := Highlight("README.md", src, th)
 
 	fgAt := func(line, col int) tcell.Color {
@@ -272,6 +273,11 @@ func TestHighlight_MarkdownStructuralStyles(t *testing.T) {
 	}
 	if fgAt(4, 0) != th.Muted {
 		t.Fatalf("closing fence fg = %v, want Muted", fgAt(4, 0))
+	}
+	for col := range []rune(prose) {
+		if fgAt(5, col) != th.Text {
+			t.Fatalf("prose fg at col %d = %v, want Text", col, fgAt(5, col))
+		}
 	}
 	if len(got[0]) != len([]rune("# Title")) {
 		t.Fatalf("heading row length changed: %d", len(got[0]))
@@ -315,17 +321,25 @@ func TestHighlight_MarkdownFencedCode(t *testing.T) {
 		src := "```\nplain text\n```\n```not-a-language\nunknown text\n```\n"
 		got := Highlight("README.md", src, th)
 
-		assertForeground(t, got, 1, 0, th.SynPunct)
-		assertForeground(t, got, 4, 0, th.SynPunct)
+		assertForeground(t, got, 1, 0, th.CodeText)
+		assertForeground(t, got, 4, 0, th.CodeText)
+	})
+
+	t.Run("Bash", func(t *testing.T) {
+		line := `echo "hello"`
+		src := "```bash\n" + line + "\n```\n"
+		got := Highlight("README.md", src, th)
+
+		assertForeground(t, got, 1, strings.Index(line, `"hello"`), th.SynString)
 	})
 
 	t.Run("FourBackticksRequireFourToClose", func(t *testing.T) {
 		src := "````\nbody one\n```\nbody two\n````\n"
 		got := Highlight("README.md", src, th)
 
-		assertForeground(t, got, 1, 0, th.SynPunct)
-		assertForeground(t, got, 2, 0, th.SynPunct)
-		assertForeground(t, got, 3, 0, th.SynPunct)
+		assertForeground(t, got, 1, 0, th.CodeText)
+		assertForeground(t, got, 2, 0, th.CodeText)
+		assertForeground(t, got, 3, 0, th.CodeText)
 		assertForeground(t, got, 4, 0, th.Muted)
 	})
 
@@ -343,6 +357,118 @@ func TestHighlight_MarkdownFencedCode(t *testing.T) {
 		got := Highlight("README.md", src, th)
 
 		assertForeground(t, got, 1, 0, th.SynKeyword)
+	})
+}
+
+func TestHighlightVisible_MarkdownProseAndFencedCode(t *testing.T) {
+	th := theme.Default()
+	prose := "普通正文"
+	jsonLine := `{"name":"spice","count":42}`
+	lines := []string{prose, "```json", jsonLine, "```"}
+	got := HighlightVisible("README.md", lines, 0, len(lines), th)
+
+	foregroundAt := func(line, col int) tcell.Color {
+		fg, _, _ := got[line][col].Decompose()
+		return fg
+	}
+	for col := range []rune(prose) {
+		if fg := foregroundAt(0, col); fg != th.Text {
+			t.Fatalf("prose fg at col %d = %v, want Text", col, fg)
+		}
+	}
+	if fg := foregroundAt(2, strings.Index(jsonLine, `"spice"`)); fg != th.SynString {
+		t.Fatalf("JSON string fg = %v, want SynString", fg)
+	}
+	if fg := foregroundAt(2, strings.Index(jsonLine, "42")); fg != th.SynNumber {
+		t.Fatalf("JSON number fg = %v, want SynNumber", fg)
+	}
+}
+
+func TestHighlightVisible_MarkdownOffsetRetainsFenceStyles(t *testing.T) {
+	th := theme.Default()
+	jsonLine := `{"name":"spice","count":42}`
+	prose := "visible prose"
+	lines := []string{"prefix", "```json", jsonLine, "```", prose, "suffix"}
+	got := HighlightVisible("README.md", lines, 2, 3, th)
+
+	if got[0] != nil || got[1] != nil || got[5] != nil {
+		t.Fatalf("off-screen rows were highlighted: %v %v %v", got[0], got[1], got[5])
+	}
+	foregroundAt := func(line, col int) tcell.Color {
+		fg, _, _ := got[line][col].Decompose()
+		return fg
+	}
+	if fg := foregroundAt(2, strings.Index(jsonLine, `"spice"`)); fg != th.SynString {
+		t.Fatalf("JSON string fg = %v, want SynString", fg)
+	}
+	if fg := foregroundAt(2, strings.Index(jsonLine, "42")); fg != th.SynNumber {
+		t.Fatalf("JSON number fg = %v, want SynNumber", fg)
+	}
+	for col := range []rune(prose) {
+		if fg := foregroundAt(4, col); fg != th.Text {
+			t.Fatalf("prose fg at col %d = %v, want Text", col, fg)
+		}
+	}
+}
+
+func TestHighlightVisible_MarkdownRecoversDeepFenceState(t *testing.T) {
+	th := theme.Default()
+
+	foregroundAt := func(styles [][]tcell.Style, line, col int) tcell.Color {
+		fg, _, _ := styles[line][col].Decompose()
+		return fg
+	}
+	assertTextRow := func(t *testing.T, styles [][]tcell.Style, line int, prose string) {
+		t.Helper()
+		for col := range []rune(prose) {
+			if fg := foregroundAt(styles, line, col); fg != th.Text {
+				t.Fatalf("prose fg at %d:%d = %v, want Text", line, col, fg)
+			}
+		}
+	}
+	deepBody := func(opener string) []string {
+		lines := []string{opener}
+		for range highlightLeadLines {
+			lines = append(lines, "fence body")
+		}
+		return lines
+	}
+
+	t.Run("RecognizedLanguage", func(t *testing.T) {
+		jsonLine := `{"name":"spice","count":42}`
+		prose := "after JSON fence"
+		lines := deepBody("```json")
+		lines = append(lines, jsonLine, "```", prose)
+		codeLine := len(lines) - 3
+		got := HighlightVisible("README.md", lines, codeLine, 3, th)
+
+		if got[0] != nil {
+			t.Fatalf("off-screen opener row was highlighted: %v", got[0])
+		}
+		if fg := foregroundAt(got, codeLine, strings.Index(jsonLine, `"spice"`)); fg != th.SynString {
+			t.Fatalf("JSON string fg = %v, want SynString", fg)
+		}
+		if fg := foregroundAt(got, codeLine, strings.Index(jsonLine, "42")); fg != th.SynNumber {
+			t.Fatalf("JSON number fg = %v, want SynNumber", fg)
+		}
+		assertTextRow(t, got, codeLine+2, prose)
+	})
+
+	t.Run("UnknownLanguage", func(t *testing.T) {
+		code := "unknown code"
+		prose := "after unknown fence"
+		lines := deepBody("```not-a-language")
+		lines = append(lines, code, "```", prose)
+		codeLine := len(lines) - 3
+		got := HighlightVisible("README.md", lines, codeLine, 3, th)
+
+		if got[0] != nil {
+			t.Fatalf("off-screen opener row was highlighted: %v", got[0])
+		}
+		if fg := foregroundAt(got, codeLine, 0); fg != th.CodeText {
+			t.Fatalf("unknown code fg = %v, want CodeText", fg)
+		}
+		assertTextRow(t, got, codeLine+2, prose)
 	})
 }
 
