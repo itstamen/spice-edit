@@ -1945,7 +1945,7 @@ func (a *App) sidebarClick(x, y int) {
 		return
 	}
 	a.setActiveFolder(filepath.Dir(n.Path))
-	a.openFileWithExternalPolicy(n.Path, externalOpenConfirm)
+	a.openFileWithExternalPolicy(n.Path, externalOpenConfirmWithoutTab)
 }
 
 // setActiveFolder records path as the editor's current working folder and
@@ -2252,13 +2252,13 @@ func (a *App) flash(msg string) {
 	a.statusUntil = time.Now().Add(statusFlashFor)
 }
 
-// externalOpenPolicy controls whether selecting an external tab launches the
-// host application immediately or first asks the user for confirmation.
+// externalOpenPolicy controls whether an external file gets a placeholder tab
+// and launches immediately or leaves the current tab active while confirming.
 type externalOpenPolicy uint8
 
 const (
 	externalOpenImmediate externalOpenPolicy = iota
-	externalOpenConfirm
+	externalOpenConfirmWithoutTab
 )
 
 // OpenFile opens the file at path in a new tab — or switches to it if
@@ -2276,8 +2276,8 @@ func (a *App) openFile(path string) {
 	a.openFileWithExternalPolicy(path, externalOpenImmediate)
 }
 
-// openFileWithExternalPolicy shares tab creation and activation while letting
-// callers choose how an external file is handed to the host application.
+// openFileWithExternalPolicy shares classification and inline tab handling
+// while letting callers keep external files out of the tab bar.
 func (a *App) openFileWithExternalPolicy(path string, policy externalOpenPolicy) {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
@@ -2300,21 +2300,30 @@ func (a *App) openFileWithExternalPolicy(path string, policy externalOpenPolicy)
 		a.tree.Reveal(path, listH)
 	}
 	for i, t := range a.tabs {
-		if t.Path == path {
-			a.activeTab = i
-			if t.IsExternal() {
-				a.handleExternalFileOpen(t.Path, policy)
-				return
-			}
-			if !t.IsReadOnly() {
-				a.reopenTextTab(t)
-			}
+		if t.Path != path {
+			continue
+		}
+		if t.IsExternal() && policy == externalOpenConfirmWithoutTab {
+			a.handleExternalFileOpen(t.Path, policy)
 			return
 		}
+		a.activeTab = i
+		if t.IsExternal() {
+			a.handleExternalFileOpen(t.Path, policy)
+			return
+		}
+		if !t.IsReadOnly() {
+			a.reopenTextTab(t)
+		}
+		return
 	}
 	t, err := editor.NewTab(path)
 	if err != nil {
 		a.flash(fmt.Sprintf("Error: %v", err))
+		return
+	}
+	if t.IsExternal() && policy == externalOpenConfirmWithoutTab {
+		a.handleExternalFileOpen(t.Path, policy)
 		return
 	}
 	a.tabs = append(a.tabs, t)
@@ -2330,9 +2339,9 @@ func (a *App) openFileWithExternalPolicy(path string, policy externalOpenPolicy)
 }
 
 // handleExternalFileOpen applies the caller's launch policy after the
-// external placeholder tab has been created or activated.
+// external path has been classified. Tree confirmation does not require a tab.
 func (a *App) handleExternalFileOpen(path string, policy externalOpenPolicy) {
-	if policy == externalOpenConfirm {
+	if policy == externalOpenConfirmWithoutTab {
 		name := filepath.Base(path)
 		a.openConfirm(
 			"Open with default app?",

@@ -45,7 +45,8 @@ func assertDefaultAppNotOpened(t *testing.T, opened <-chan string) {
 }
 
 // TestSidebarClick_ExternalRequiresConfirmation verifies that a tree click
-// activates the placeholder first and only launches after an explicit Yes.
+// opens confirmation without creating a placeholder and only launches after
+// an explicit Yes.
 func TestSidebarClick_ExternalRequiresConfirmation(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "manual.pdf")
@@ -70,8 +71,11 @@ func TestSidebarClick_ExternalRequiresConfirmation(t *testing.T) {
 	if !strings.Contains(a.confirmMessage, "manual.pdf") {
 		t.Fatalf("confirm message = %q", a.confirmMessage)
 	}
-	if tab := a.activeTabPtr(); tab == nil || !tab.IsExternal() || tab.Path != target {
-		t.Fatalf("active tab = %#v", tab)
+	if len(a.tabs) != 0 || a.activeTabPtr() != nil {
+		t.Fatalf("external tree click created a tab: count=%d active=%#v", len(a.tabs), a.activeTabPtr())
+	}
+	if a.activeFolder != dir || a.tree.ActiveFile != target {
+		t.Fatalf("tree context = folder %q file %q, want %q %q", a.activeFolder, a.tree.ActiveFile, dir, target)
 	}
 	assertDefaultAppNotOpened(t, opened)
 
@@ -86,12 +90,19 @@ func TestSidebarClick_ExternalRequiresConfirmation(t *testing.T) {
 		t.Fatal("opener did not run after confirmation")
 	}
 	a.handleEvent(waitForDefaultOpenDone(t, a))
+	if len(a.tabs) != 0 || a.activeTabPtr() != nil {
+		t.Fatalf("confirm Yes created a tab: count=%d active=%#v", len(a.tabs), a.activeTabPtr())
+	}
 }
 
-// TestSidebarClick_ExternalCancelAndRepeat keeps the placeholder active after
-// No and requires a fresh confirmation on every later tree click.
+// TestSidebarClick_ExternalCancelAndRepeat keeps the current text tab active
+// after No and requires a fresh confirmation on every later tree click.
 func TestSidebarClick_ExternalCancelAndRepeat(t *testing.T) {
 	dir := t.TempDir()
+	textPath := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(textPath, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	target := filepath.Join(dir, "manual.pdf")
 	if err := os.WriteFile(target, []byte("%PDF-1.7"), 0o644); err != nil {
 		t.Fatal(err)
@@ -102,31 +113,30 @@ func TestSidebarClick_ExternalCancelAndRepeat(t *testing.T) {
 		opened <- path
 		return nil
 	}
+	a.openFile(textPath)
+	original := a.activeTabPtr()
 
 	clickTreePath(t, a, target)
 	a.confirmCancel()
 	if a.confirmOpen {
 		t.Fatal("confirmation remained open after cancel")
 	}
-	if len(a.tabs) != 1 || a.activeTabPtr().Path != target || !a.activeTabPtr().IsExternal() {
-		t.Fatalf("cancel changed external tab state: tabs=%d active=%#v", len(a.tabs), a.activeTabPtr())
+	if len(a.tabs) != 1 || a.activeTabPtr() != original {
+		t.Fatalf("cancel changed tabs: count=%d active=%#v want=%#v", len(a.tabs), a.activeTabPtr(), original)
 	}
 	assertDefaultAppNotOpened(t, opened)
 
 	clickTreePath(t, a, target)
-	if !a.confirmOpen {
-		t.Fatal("repeated tree click did not reopen confirmation")
-	}
-	if len(a.tabs) != 1 {
-		t.Fatalf("repeated tree click created %d tabs", len(a.tabs))
+	if !a.confirmOpen || len(a.tabs) != 1 || a.activeTabPtr() != original {
+		t.Fatalf("repeat changed editor state: confirm=%v tabs=%d active=%#v", a.confirmOpen, len(a.tabs), a.activeTabPtr())
 	}
 	a.confirmCancel()
 	assertDefaultAppNotOpened(t, opened)
 }
 
-// TestSidebarClick_TextAndImageStayInline ensures the tree confirmation is
-// limited to files classified as external.
-func TestSidebarClick_TextAndImageStayInline(t *testing.T) {
+// TestSidebarClick_TextAndImageOpenTabs ensures supported inline file types
+// retain their existing editable and preview tabs.
+func TestSidebarClick_TextAndImageOpenTabs(t *testing.T) {
 	dir := t.TempDir()
 	textPath := filepath.Join(dir, "notes.txt")
 	if err := os.WriteFile(textPath, []byte("hello"), 0o644); err != nil {
@@ -141,13 +151,50 @@ func TestSidebarClick_TextAndImageStayInline(t *testing.T) {
 	}
 
 	clickTreePath(t, a, textPath)
-	if a.confirmOpen || a.activeTabPtr().IsReadOnly() {
-		t.Fatalf("text tree click confirm=%v readOnly=%v", a.confirmOpen, a.activeTabPtr().IsReadOnly())
+	if a.confirmOpen || len(a.tabs) != 1 || a.activeTabPtr().IsReadOnly() {
+		t.Fatalf("text tree click confirm=%v tabs=%d readOnly=%v", a.confirmOpen, len(a.tabs), a.activeTabPtr().IsReadOnly())
 	}
 
 	clickTreePath(t, a, imagePath)
-	if a.confirmOpen || !a.activeTabPtr().IsImage() {
-		t.Fatalf("image tree click confirm=%v image=%v", a.confirmOpen, a.activeTabPtr().IsImage())
+	if a.confirmOpen || len(a.tabs) != 2 || !a.activeTabPtr().IsImage() {
+		t.Fatalf("image tree click confirm=%v tabs=%d image=%v", a.confirmOpen, len(a.tabs), a.activeTabPtr().IsImage())
+	}
+	assertDefaultAppNotOpened(t, opened)
+}
+
+// TestSidebarClick_ExistingExternalTabIsNotActivated keeps tree confirmation
+// from switching to a placeholder created by a non-tree entry point.
+func TestSidebarClick_ExistingExternalTabIsNotActivated(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "manual.pdf")
+	if err := os.WriteFile(target, []byte("%PDF-1.7"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	textPath := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(textPath, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	opened := make(chan string, 2)
+	a.openPath = func(path string) error {
+		opened <- path
+		return nil
+	}
+
+	a.openFile(target)
+	if got := <-opened; got != target {
+		t.Fatalf("initial opened path = %q, want %q", got, target)
+	}
+	a.handleEvent(waitForDefaultOpenDone(t, a))
+	a.openFile(textPath)
+	original := a.activeTabPtr()
+
+	clickTreePath(t, a, target)
+	if !a.confirmOpen {
+		t.Fatal("tree click did not open confirmation")
+	}
+	if len(a.tabs) != 2 || a.activeTabPtr() != original {
+		t.Fatalf("tree click activated external placeholder: tabs=%d active=%#v", len(a.tabs), a.activeTabPtr())
 	}
 	assertDefaultAppNotOpened(t, opened)
 }

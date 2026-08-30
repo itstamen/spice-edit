@@ -233,12 +233,12 @@ the hotkeys are just a faster path for the actions you reach for most.
 ### File types and default applications
 
 SpiceEdit edits UTF-8 text files and previews PNG, JPEG, and the first
-frame of GIF images inside the terminal. Clicking a PDF, office document,
-archive, database, media file, executable, or other unsupported file opens a
-read-only placeholder and asks before launching the default application on
-the machine running SpiceEdit. Choosing No keeps the placeholder active
-without launching another application. The editor pane displays
-`编辑器只支持文本及图片文件在线编辑.`
+frame of GIF images inside the terminal. From the left file tree, text files
+open editable tabs and supported images open preview tabs. Clicking a PDF,
+office document, archive, database, media file, executable, or other
+unsupported file keeps the current editor tab unchanged and asks whether to
+launch the system default application. Choosing No closes the prompt without
+creating a tab or launching another application.
 
 Press `Esc o` or choose **Open with default app** from the `≡` menu to hand
 any file-backed text, image, or placeholder tab to the host operating system.
