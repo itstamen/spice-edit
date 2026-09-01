@@ -99,3 +99,33 @@ Document exact-node yellow/bold selection and unsupported-file context actions w
 Run: `gofmt -w` on changed Go files, `make test`, `make build`, and `git diff --check`.
 
 Expected: all tests pass and `bin/spiceedit` is generated.
+
+### Task 3: Main Menu Targets the Selected Tree Node
+
+**Files:**
+- Modify: `internal/app/app.go`
+- Modify: `internal/app/fileops.go`
+- Modify: `internal/app/externalfile_test.go`
+- Modify: `internal/app/fileops_test.go`
+- Modify: `internal/app/leader_test.go`
+- Modify: `README.md`
+
+**Interfaces:**
+- Produces: `App.fileActionTarget() (string, bool)` and `App.hasFileActionTarget() bool`.
+- Consumes: `Tree.SelectedPath`, the active tab fallback used in single-file mode, and the existing five file actions.
+
+- [x] **Step 1: Add failing menu-target tests**
+
+Assert that selecting an unsupported tree file enables Open with default app, Rename file, Delete file, Copy relative path, and Copy absolute path in the `Esc+Esc` menu with no tab or an unrelated active tab. Activate each action and prove it targets the selected node. Assert that selecting a folder disables file actions and enables only applicable folder actions.
+
+- [x] **Step 2: Add fallback and shortcut tests**
+
+Assert that `SelectedPath == ""` can fall back to an active file-backed tab for compatibility, `tree == nil` preserves single-file behavior, and `Esc+o` opens the selected unsupported tree file rather than an unrelated active tab.
+
+- [x] **Step 3: Implement shared target resolution**
+
+Add one resolver used by the five menu predicates and actions. A non-empty tree selection is authoritative: a selected existing file is the target; a selected directory, project root, or stale path yields no file target and must not fall back to an unrelated tab. With no explicit tree selection, or without a tree, retain the active file-backed tab fallback. Make folder-action enablement require an explicitly selected folder when a tree selection exists.
+
+- [x] **Step 4: Update documentation and validate**
+
+Update README to state that both the tree context menu and `Esc+Esc` file actions target the exact selected node. Run `gofmt`, focused tests, `go test -race -count=1 ./...`, `make build`, and `git diff --check`.
