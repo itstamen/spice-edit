@@ -64,9 +64,9 @@ type Tree struct {
 	ActiveFolder string
 	ActiveFile   string
 
-	// SelectedPath is the exact file or folder selected in the tree. Unlike
-	// ActiveFolder, which chooses the target for file operations, this field
-	// exists solely for tree selection rendering.
+	// SelectedPath is the exact file or folder selected in the tree. It drives
+	// both tree rendering and main-menu actions; ActiveFolder remains the
+	// default location for create actions when no explicit selection applies.
 	SelectedPath string
 
 	// DirtyFiles and DirtyFolders carry the project's git status — both

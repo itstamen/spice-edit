@@ -223,14 +223,14 @@ func builtinMenuGroups() [][]menuItemDef {
 		{
 			{shortcut: "Esc n", action: (*App).menuNewFile, enabled: alwaysTrue, labelFor: (*App).newFileLabel},
 			{label: "New folder", action: (*App).menuNewFolder, enabled: alwaysTrue},
-			{label: "Open with default app", shortcut: "Esc o", action: (*App).menuOpenWithDefaultApp, enabled: (*App).hasFileTab},
+			{label: "Open with default app", shortcut: "Esc o", action: (*App).menuOpenWithDefaultApp, enabled: (*App).hasFileActionTarget},
 			{label: "Show in file manager", shortcut: "Esc e", action: (*App).menuShowInFileManager, enabled: alwaysTrue},
-			{label: "Rename file", action: (*App).menuRename, enabled: (*App).hasFileTab},
-			{label: "Delete file", action: (*App).menuDelete, enabled: (*App).hasFileTab},
+			{label: "Rename file", action: (*App).menuRename, enabled: (*App).hasFileActionTarget},
+			{label: "Delete file", action: (*App).menuDelete, enabled: (*App).hasFileActionTarget},
 			{action: (*App).menuRenameFolder, enabled: (*App).hasActiveSubfolder, labelFor: (*App).renameFolderLabel},
 			{action: (*App).menuDeleteFolder, enabled: (*App).hasActiveSubfolder, labelFor: (*App).deleteFolderLabel},
-			{label: "Copy relative path", action: (*App).menuCopyRelativePath, enabled: (*App).hasFileTab},
-			{label: "Copy absolute path", action: (*App).menuCopyAbsolutePath, enabled: (*App).hasFileTab},
+			{label: "Copy relative path", action: (*App).menuCopyRelativePath, enabled: (*App).hasFileActionTarget},
+			{label: "Copy absolute path", action: (*App).menuCopyAbsolutePath, enabled: (*App).hasFileActionTarget},
 		},
 		// Clipboard
 		{
@@ -2892,12 +2892,41 @@ func (a *App) hasSavableTab() bool {
 	return t != nil && t.Path != "" && !t.IsReadOnly()
 }
 
-// hasFileTab reports whether the active tab is backed by a real file
-// (text or image). Used by Rename / Delete which act on the file
-// regardless of how the tab is rendered.
+// hasFileTab reports whether the active tab is backed by a real file (text or
+// image). It deliberately remains an active-tab predicate; main-menu file
+// actions use hasFileActionTarget to include explicit tree selections.
 func (a *App) hasFileTab() bool {
 	t := a.activeTabPtr()
 	return t != nil && t.Path != ""
+}
+
+// fileActionTarget resolves the file used by the main menu's file actions.
+// An explicit tree selection is authoritative: only an existing non-directory
+// file may be used, and an invalid selection must not redirect an action to an
+// unrelated active tab. Without a selection (or without a tree), preserve the
+// active file-backed tab behavior used in single-file mode.
+func (a *App) fileActionTarget() (string, bool) {
+	if a.tree != nil && a.tree.SelectedPath != "" {
+		path := a.tree.SelectedPath
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			return "", false
+		}
+		return path, true
+	}
+	tab := a.activeTabPtr()
+	if tab == nil || tab.Path == "" {
+		return "", false
+	}
+	return tab.Path, true
+}
+
+// hasFileActionTarget reports whether a main-menu file action has a valid
+// target. It intentionally differs from hasFileTab, which retains its
+// established active-tab-only meaning for callers that need that distinction.
+func (a *App) hasFileActionTarget() bool {
+	_, ok := a.fileActionTarget()
+	return ok
 }
 
 // hasSelection reports whether the active tab has a non-empty selection.
@@ -3169,16 +3198,16 @@ func (a *App) menuToggleLineComment() {
 	a.flash("Toggled line comment")
 }
 
-// menuOpenWithDefaultApp opens the active file-backed tab through the host
+// menuOpenWithDefaultApp opens the resolved file target through the host
 // operating system without saving or otherwise mutating editor state.
 func (a *App) menuOpenWithDefaultApp() {
 	a.closeMenu()
-	tab := a.activeTabPtr()
-	if tab == nil || tab.Path == "" {
+	target, ok := a.fileActionTarget()
+	if !ok {
 		a.flash("No file to open with default app")
 		return
 	}
-	a.openPathWithDefaultApp(tab.Path)
+	a.openPathWithDefaultApp(target)
 }
 
 // menuShowInFileManager selects the active file in the host file manager or

@@ -243,13 +243,14 @@ creating a tab or launching another application.
 The file tree keeps one exact clicked-node selection, shown in bold yellow.
 Right-clicking an unsupported file offers **Open with default app**,
 **Rename file**, **Delete file**, **Copy relative path**, and **Copy absolute
-path**. These operations act on that clicked file directly; opening it with
-the default app does not create or switch an editor tab.
+path**. Those file actions in both the tree context menu and the `Esc Esc`
+main menu act on that exact selected file directly; opening it with the
+default app does not create or switch an editor tab.
 
 Press `Esc o` or choose **Open with default app** from the `≡` menu to hand
-any file-backed text, image, or placeholder tab to the host operating system.
-Dirty text buffers are not saved first; the external application receives the
-current on-disk file.
+the selected tree file, or an active file-backed tab when no tree node is
+selected, to the host operating system. Dirty text buffers are not saved first;
+the external application receives the current on-disk file.
 
 Press `Esc e` or choose **Show in file manager** to open the current project
 context in macOS Finder or Windows Explorer. In project mode, the action

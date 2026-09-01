@@ -636,6 +636,46 @@ func TestHasActiveSubfolder_Predicate(t *testing.T) {
 	}
 }
 
+// TestFileActionTarget_SelectionAndFallback locks down the target resolver:
+// an explicit tree selection wins, including its no-target cases, while an
+// empty selection and single-file mode preserve the active-tab fallback.
+func TestFileActionTarget_SelectionAndFallback(t *testing.T) {
+	root := t.TempDir()
+	activePath := filepath.Join(root, "active.txt")
+	target := filepath.Join(root, "selected.pdf")
+	folder := filepath.Join(root, "folder")
+	for _, path := range []string{activePath, target} {
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, root)
+	a.openFile(activePath)
+
+	a.tree.SelectedPath = target
+	if got, ok := a.fileActionTarget(); !ok || got != target {
+		t.Fatalf("selected file target = %q, %v; want %q, true", got, ok, target)
+	}
+	for _, selected := range []string{folder, a.tree.Root.Path, filepath.Join(root, "gone.pdf")} {
+		a.tree.SelectedPath = selected
+		if got, ok := a.fileActionTarget(); ok || got != "" {
+			t.Fatalf("selected %q target = %q, %v; want no target", selected, got, ok)
+		}
+	}
+
+	a.tree.SelectedPath = ""
+	if got, ok := a.fileActionTarget(); !ok || got != activePath {
+		t.Fatalf("empty selection fallback = %q, %v; want %q, true", got, ok, activePath)
+	}
+	a.tree = nil
+	if got, ok := a.fileActionTarget(); !ok || got != activePath {
+		t.Fatalf("single-file fallback = %q, %v; want %q, true", got, ok, activePath)
+	}
+}
+
 // TestDeleteFolderLabel_DynamicSuffix mirrors the New File label
 // pattern: bare label at root, "(subdir/)" suffix when the active
 // folder is somewhere we'd actually act on. Without this, the menu

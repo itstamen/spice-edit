@@ -351,7 +351,7 @@ func (a *App) syncActiveFolderAfterDelete() {
 }
 
 // -----------------------------------------------------------------------------
-// Main menu actions: rename / delete the file backing the active tab.
+// Main menu actions: rename / delete the resolved file target.
 // -----------------------------------------------------------------------------
 
 // menuNewFile prompts the user for a filename and creates an empty file in
@@ -438,16 +438,14 @@ func (a *App) relativeFolderLabel(folder string) string {
 	return rel + string(filepath.Separator)
 }
 
-// menuRename opens a prompt pre-filled with the active tab's basename and
-// renames the file on submit. Untitled tabs are skipped — the menu row is
-// disabled for them anyway via hasSavableTab.
+// menuRename opens a prompt pre-filled with the resolved target's basename
+// and renames that file on submit.
 func (a *App) menuRename() {
 	a.closeMenu()
-	tab := a.activeTabPtr()
-	if tab == nil || tab.Path == "" {
+	old, ok := a.fileActionTarget()
+	if !ok {
 		return
 	}
-	old := tab.Path
 	a.openPrompt(
 		"Rename file",
 		"in "+filepath.Dir(old),
@@ -458,15 +456,14 @@ func (a *App) menuRename() {
 	)
 }
 
-// menuDelete opens a Yes/No confirm modal; on Yes, removes the active tab's
-// file from disk and closes the tab.
+// menuDelete opens a Yes/No confirm modal; on Yes, removes the resolved file
+// target from disk and closes any tab backed by it.
 func (a *App) menuDelete() {
 	a.closeMenu()
-	tab := a.activeTabPtr()
-	if tab == nil || tab.Path == "" {
+	target, ok := a.fileActionTarget()
+	if !ok {
 		return
 	}
-	target := tab.Path
 	a.openConfirm(
 		"Delete file",
 		"Permanently delete "+filepath.Base(target)+"?",
@@ -666,12 +663,15 @@ func trailingCells(text string, maxCells int) string {
 	return string([]rune(text)[start:])
 }
 
-// hasActiveSubfolder is the menu predicate shared by every "act on
-// the active folder" row (Delete, Rename, …). True when activeFolder
-// points at a real subdirectory of the project root. Lives next to
-// hasFileTab so the file/folder predicates form a matched pair.
+// hasActiveSubfolder is the menu predicate shared by every "act on folder"
+// row (Delete, Rename, …). With an explicit tree selection, only the selected
+// non-root directory qualifies; otherwise it preserves the active-folder
+// fallback used before tree selection existed.
 func (a *App) hasActiveSubfolder() bool {
 	folder := a.activeFolder
+	if a.tree != nil && a.tree.SelectedPath != "" {
+		folder = a.tree.SelectedPath
+	}
 	if folder == "" || folder == a.rootDir {
 		return false
 	}
@@ -800,30 +800,30 @@ func absolutePathFor(path string) string {
 	return abs
 }
 
-// menuCopyRelativePath copies the active tab's path, rendered relative to
-// the project root, onto the host system clipboard via OSC 52. Works the
-// same locally and over SSH — the terminal emulator is the thing that
-// actually receives the clipboard write, regardless of where the editor
-// is running.
+// menuCopyRelativePath copies the resolved file target, rendered relative to
+// the project root, onto the host system clipboard via OSC 52. Works the same
+// locally and over SSH — the terminal emulator is the thing that actually
+// receives the clipboard write, regardless of where the editor is running.
 func (a *App) menuCopyRelativePath() {
 	a.closeMenu()
-	tab := a.activeTabPtr()
-	if tab == nil || tab.Path == "" {
+	target, ok := a.fileActionTarget()
+	if !ok {
 		return
 	}
-	a.copyPathToSystemClipboard(a.relativePathFor(tab.Path), "relative path")
+	a.copyPathToSystemClipboard(a.relativePathFor(target), "relative path")
 }
 
-// menuCopyAbsolutePath copies the active tab's absolute path onto the host
-// system clipboard. Useful when pasting the path into a shell on the same
-// remote machine (e.g. another tmux pane running over the same SSH session).
+// menuCopyAbsolutePath copies the resolved file target's absolute path onto
+// the host system clipboard. Useful when pasting the path into a shell on the
+// same remote machine (e.g. another tmux pane running over the same SSH
+// session).
 func (a *App) menuCopyAbsolutePath() {
 	a.closeMenu()
-	tab := a.activeTabPtr()
-	if tab == nil || tab.Path == "" {
+	target, ok := a.fileActionTarget()
+	if !ok {
 		return
 	}
-	a.copyPathToSystemClipboard(absolutePathFor(tab.Path), "absolute path")
+	a.copyPathToSystemClipboard(absolutePathFor(target), "absolute path")
 }
 
 // ctxCopyRelativePath copies n's path (relative to the project root) onto
