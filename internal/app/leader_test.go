@@ -171,6 +171,39 @@ func TestHandleKey_LeaderOpenWithDefaultApp(t *testing.T) {
 	a.handleEvent(waitForDefaultOpenDone(t, a))
 }
 
+// TestHandleKey_LeaderOpenWithDefaultApp_SelectedTreeFile verifies Esc-o
+// honors an unsupported tree selection instead of opening an unrelated tab.
+func TestHandleKey_LeaderOpenWithDefaultApp_SelectedTreeFile(t *testing.T) {
+	dir := t.TempDir()
+	active := filepath.Join(dir, "active.txt")
+	target := filepath.Join(dir, "manual.pdf")
+	if err := os.WriteFile(active, []byte("active"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("%PDF-1.7"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(active)
+	a.tree.SelectedPath = target
+	opened := make(chan string, 1)
+	a.openPath = func(path string) error {
+		opened <- path
+		return nil
+	}
+
+	sendLeader(a, 'o')
+	select {
+	case got := <-opened:
+		if got != target {
+			t.Fatalf("opened path = %q, want selected tree file %q", got, target)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Esc-o did not invoke opener for selected tree file")
+	}
+	a.handleEvent(waitForDefaultOpenDone(t, a))
+}
+
 // TestHandleKey_LeaderShowInFileManager verifies Esc-e reaches the shared
 // reveal action and follows the selected project directory.
 func TestHandleKey_LeaderShowInFileManager(t *testing.T) {

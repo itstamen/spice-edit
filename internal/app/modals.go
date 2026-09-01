@@ -35,9 +35,9 @@ const (
 	confirmModalWidth  = 54
 	confirmModalHeight = 9
 
-	// contextMenuWidth is fixed so the popup geometry stays predictable —
-	// the labels are short enough to fit comfortably.
-	contextMenuWidth = 22
+	// contextMenuWidth is fixed so the popup geometry stays predictable while
+	// allowing the longest file-node action, "Open with default app", to fit.
+	contextMenuWidth = 26
 )
 
 // contextItem is one row in a right-click context menu. Each row captures the
@@ -851,13 +851,20 @@ func (a *App) openTreeContext(n *filetree.Node, x, y int) {
 	}
 	if n.IsDir {
 		add("New File", ctxNewFile)
+	} else {
+		add("Open with default app", ctxOpenWithDefaultApp)
 	}
 	if n != a.tree.Root {
-		add("Rename", ctxRename)
-		add("Delete", ctxDelete)
+		if n.IsDir {
+			add("Rename folder", ctxRename)
+			add("Delete folder", ctxDelete)
+		} else {
+			add("Rename file", ctxRename)
+			add("Delete file", ctxDelete)
+		}
 	}
-	add("Copy rel path", ctxCopyRelativePath)
-	add("Copy abs path", ctxCopyAbsolutePath)
+	add("Copy relative path", ctxCopyRelativePath)
+	add("Copy absolute path", ctxCopyAbsolutePath)
 
 	a.contextItems = items
 	a.contextHover = 0

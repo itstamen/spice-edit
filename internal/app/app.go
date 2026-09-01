@@ -223,14 +223,14 @@ func builtinMenuGroups() [][]menuItemDef {
 		{
 			{shortcut: "Esc n", action: (*App).menuNewFile, enabled: alwaysTrue, labelFor: (*App).newFileLabel},
 			{label: "New folder", action: (*App).menuNewFolder, enabled: alwaysTrue},
-			{label: "Open with default app", shortcut: "Esc o", action: (*App).menuOpenWithDefaultApp, enabled: (*App).hasFileTab},
+			{label: "Open with default app", shortcut: "Esc o", action: (*App).menuOpenWithDefaultApp, enabled: (*App).hasFileActionTarget},
 			{label: "Show in file manager", shortcut: "Esc e", action: (*App).menuShowInFileManager, enabled: alwaysTrue},
-			{label: "Rename file", action: (*App).menuRename, enabled: (*App).hasFileTab},
-			{label: "Delete file", action: (*App).menuDelete, enabled: (*App).hasFileTab},
+			{label: "Rename file", action: (*App).menuRename, enabled: (*App).hasFileActionTarget},
+			{label: "Delete file", action: (*App).menuDelete, enabled: (*App).hasFileActionTarget},
 			{action: (*App).menuRenameFolder, enabled: (*App).hasActiveSubfolder, labelFor: (*App).renameFolderLabel},
 			{action: (*App).menuDeleteFolder, enabled: (*App).hasActiveSubfolder, labelFor: (*App).deleteFolderLabel},
-			{label: "Copy relative path", action: (*App).menuCopyRelativePath, enabled: (*App).hasFileTab},
-			{label: "Copy absolute path", action: (*App).menuCopyAbsolutePath, enabled: (*App).hasFileTab},
+			{label: "Copy relative path", action: (*App).menuCopyRelativePath, enabled: (*App).hasFileActionTarget},
+			{label: "Copy absolute path", action: (*App).menuCopyAbsolutePath, enabled: (*App).hasFileActionTarget},
 		},
 		// Clipboard
 		{
@@ -1889,6 +1889,7 @@ func (a *App) tryTreeContextClick(x, y int) bool {
 	} else {
 		a.setActiveFolder(filepath.Dir(n.Path))
 	}
+	a.tree.SelectedPath = n.Path
 	a.openTreeContext(n, x, y)
 	return true
 }
@@ -1936,9 +1937,11 @@ func (a *App) sidebarClick(x, y int) {
 		return
 	}
 	if n == a.tree.Root {
+		a.tree.SelectedPath = n.Path
 		a.setActiveFolder(a.rootDir)
 		return
 	}
+	a.tree.SelectedPath = n.Path
 	if n.IsDir {
 		a.setActiveFolder(n.Path)
 		a.tree.Toggle(n)
@@ -1949,8 +1952,8 @@ func (a *App) sidebarClick(x, y int) {
 }
 
 // setActiveFolder records path as the editor's current working folder and
-// mirrors it onto the file tree so the matching row renders with the
-// "active" highlight. All writes to a.activeFolder go through here.
+// mirrors it onto the file tree. With no editor tab, it is also the fallback
+// exact tree selection. All writes to a.activeFolder go through here.
 func (a *App) setActiveFolder(path string) {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
@@ -1958,6 +1961,9 @@ func (a *App) setActiveFolder(path string) {
 	a.activeFolder = path
 	if a.tree != nil {
 		a.tree.ActiveFolder = path
+		if a.activeTabPtr() == nil {
+			a.tree.SelectedPath = path
+		}
 	}
 }
 
@@ -1991,9 +1997,11 @@ func (a *App) syncActiveTreeFile() {
 	tab := a.activeTabPtr()
 	if tab == nil || tab.Path == "" {
 		a.tree.ActiveFile = ""
+		a.tree.SelectedPath = a.activeFolder
 		return
 	}
 	a.tree.ActiveFile = tab.Path
+	a.tree.SelectedPath = tab.Path
 }
 
 // editorPress handles the initial mouse press inside the editor — placing
@@ -2285,6 +2293,7 @@ func (a *App) openFileWithExternalPolicy(path string, policy externalOpenPolicy)
 	a.setActiveFolder(filepath.Dir(path))
 	if a.tree != nil {
 		a.tree.ActiveFile = path
+		a.tree.SelectedPath = path
 		// Reveal the file's location in the sidebar: expand every ancestor
 		// directory and scroll the row into view. Without this, opening a
 		// file via the finder (Esc-p) or the command line leaves the tree
@@ -2883,12 +2892,78 @@ func (a *App) hasSavableTab() bool {
 	return t != nil && t.Path != "" && !t.IsReadOnly()
 }
 
-// hasFileTab reports whether the active tab is backed by a real file
-// (text or image). Used by Rename / Delete which act on the file
-// regardless of how the tab is rendered.
+// hasFileTab reports whether the active tab is backed by a real file (text or
+// image). It deliberately remains an active-tab predicate; main-menu file
+// actions use hasFileActionTarget to include explicit tree selections.
 func (a *App) hasFileTab() bool {
 	t := a.activeTabPtr()
 	return t != nil && t.Path != ""
+}
+
+// projectRootPath returns the absolute project root used for filesystem
+// comparisons. In project mode the tree root is already absolute and remains
+// authoritative when App.rootDir retains user input such as ".".
+func (a *App) projectRootPath() string {
+	root := a.rootDir
+	if a.tree != nil && a.tree.Root != nil && a.tree.Root.Path != "" {
+		root = a.tree.Root.Path
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		return abs
+	}
+	return root
+}
+
+// fileActionTarget resolves the file used by the main menu's file actions.
+// An explicit tree selection is authoritative: only an existing non-directory
+// file may be used, and an invalid selection must not redirect an action to an
+// unrelated active tab. Without a selection (or without a tree), preserve the
+// active file-backed tab behavior used in single-file mode.
+func (a *App) fileActionTarget() (string, bool) {
+	if a.tree != nil && a.tree.SelectedPath != "" {
+		path := a.tree.SelectedPath
+		info, err := os.Lstat(path)
+		if err != nil || info.IsDir() {
+			return "", false
+		}
+		return path, true
+	}
+	tab := a.activeTabPtr()
+	if tab == nil || tab.Path == "" {
+		return "", false
+	}
+	return tab.Path, true
+}
+
+// hasFileActionTarget reports whether a main-menu file action has a valid
+// target. It intentionally differs from hasFileTab, which retains its
+// established active-tab-only meaning for callers that need that distinction.
+func (a *App) hasFileActionTarget() bool {
+	_, ok := a.fileActionTarget()
+	return ok
+}
+
+// folderActionTarget resolves the folder used by the main menu's folder
+// actions. An explicit tree selection is authoritative just as it is for
+// files. Lstat deliberately classifies directory symlinks as file targets so
+// deleting one removes the link rather than traversing its destination.
+func (a *App) folderActionTarget() (string, bool) {
+	folder := a.activeFolder
+	if a.tree != nil && a.tree.SelectedPath != "" {
+		folder = a.tree.SelectedPath
+	}
+	if folder == "" {
+		return "", false
+	}
+	absFolder, err := filepath.Abs(folder)
+	if err != nil || absFolder == a.projectRootPath() {
+		return "", false
+	}
+	info, err := os.Lstat(absFolder)
+	if err != nil || !info.IsDir() {
+		return "", false
+	}
+	return absFolder, true
 }
 
 // hasSelection reports whether the active tab has a non-empty selection.
@@ -3160,16 +3235,16 @@ func (a *App) menuToggleLineComment() {
 	a.flash("Toggled line comment")
 }
 
-// menuOpenWithDefaultApp opens the active file-backed tab through the host
+// menuOpenWithDefaultApp opens the resolved file target through the host
 // operating system without saving or otherwise mutating editor state.
 func (a *App) menuOpenWithDefaultApp() {
 	a.closeMenu()
-	tab := a.activeTabPtr()
-	if tab == nil || tab.Path == "" {
+	target, ok := a.fileActionTarget()
+	if !ok {
 		a.flash("No file to open with default app")
 		return
 	}
-	a.openPathWithDefaultApp(tab.Path)
+	a.openPathWithDefaultApp(target)
 }
 
 // menuShowInFileManager selects the active file in the host file manager or

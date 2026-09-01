@@ -33,6 +33,42 @@ func clickTreePath(t *testing.T, a *App, path string) {
 	t.Fatalf("tree path %q was not visible", path)
 }
 
+// rightClickTreePath dispatches a tree context click for one visible path.
+func rightClickTreePath(t *testing.T, a *App, path string) {
+	t.Helper()
+	a.draw()
+	sx, sy, _, sh := a.sidebarRect()
+	for y := sy; y < sy+sh; y++ {
+		node, ok := a.tree.HitTest(1, y-sy)
+		if ok && node.Path == path {
+			if !a.tryTreeContextClick(sx+1, y) {
+				t.Fatalf("right-click tree path %q was not handled", path)
+			}
+			return
+		}
+	}
+	t.Fatalf("tree path %q was not visible", path)
+}
+
+// activateContextItem selects and runs the named context-menu item just as
+// keyboard activation would. It keeps tests focused on the menu callback
+// rather than its drawing coordinates.
+func activateContextItem(t *testing.T, a *App, label string) {
+	t.Helper()
+	for i, item := range a.contextItems {
+		if item.label != label {
+			continue
+		}
+		if !item.isEnabled(a) {
+			t.Fatalf("context item %q is disabled", label)
+		}
+		a.contextHover = i
+		a.contextActivate()
+		return
+	}
+	t.Fatalf("context item %q not found", label)
+}
+
 // assertDefaultAppNotOpened gives the asynchronous opener enough time to run
 // and fails when a confirmation or inline-open path launches it unexpectedly.
 func assertDefaultAppNotOpened(t *testing.T, opened <-chan string) {
@@ -124,6 +160,9 @@ func TestSidebarClick_ExternalCancelAndRepeat(t *testing.T) {
 	if len(a.tabs) != 1 || a.activeTabPtr() != original {
 		t.Fatalf("cancel changed tabs: count=%d active=%#v want=%#v", len(a.tabs), a.activeTabPtr(), original)
 	}
+	if a.tree.SelectedPath != target {
+		t.Fatalf("cancelled external selection = %q, want %q", a.tree.SelectedPath, target)
+	}
 	assertDefaultAppNotOpened(t, opened)
 
 	clickTreePath(t, a, target)
@@ -132,6 +171,97 @@ func TestSidebarClick_ExternalCancelAndRepeat(t *testing.T) {
 	}
 	a.confirmCancel()
 	assertDefaultAppNotOpened(t, opened)
+}
+
+// TestDoRenameFolder_PreservesCancelledExternalSelection verifies a selected
+// unsupported file follows a parent-folder rename even though it has no tab.
+func TestDoRenameFolder_PreservesCancelledExternalSelection(t *testing.T) {
+	dir := t.TempDir()
+	oldDir := filepath.Join(dir, "old")
+	if err := os.Mkdir(oldDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(oldDir, "manual.pdf")
+	if err := os.WriteFile(target, []byte("%PDF-1.7"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+
+	clickTreePath(t, a, oldDir)
+	clickTreePath(t, a, target)
+	if !a.confirmOpen || a.tree.SelectedPath != target || a.activeFolder != oldDir {
+		t.Fatalf("external click state: confirm=%v selected=%q folder=%q", a.confirmOpen, a.tree.SelectedPath, a.activeFolder)
+	}
+	a.confirmCancel()
+	if len(a.tabs) != 0 {
+		t.Fatalf("cancelled external file opened %d tabs", len(a.tabs))
+	}
+
+	a.doRenameFolder(oldDir, "new")
+	newDir := filepath.Join(dir, "new")
+	want := filepath.Join(newDir, "manual.pdf")
+	if a.activeFolder != newDir {
+		t.Fatalf("activeFolder = %q, want %q", a.activeFolder, newDir)
+	}
+	if a.tree.SelectedPath != want {
+		t.Fatalf("SelectedPath = %q, want %q", a.tree.SelectedPath, want)
+	}
+}
+
+// TestTreeClicks_SelectExactNode checks that both mouse buttons select the
+// clicked folder or supported/unsupported file without right-clicking into a
+// different editor tab.
+func TestTreeClicks_SelectExactNode(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "docs")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	textPath := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(textPath, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	imagePath := writeImageFixture(t, dir, "photo.png")
+	externalPath := filepath.Join(dir, "manual.pdf")
+	if err := os.WriteFile(externalPath, []byte("%PDF-1.7"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+
+	clickTreePath(t, a, folder)
+	if a.tree.SelectedPath != folder {
+		t.Fatalf("folder selection = %q, want %q", a.tree.SelectedPath, folder)
+	}
+	clickTreePath(t, a, textPath)
+	if a.tree.SelectedPath != textPath {
+		t.Fatalf("text selection = %q, want %q", a.tree.SelectedPath, textPath)
+	}
+	clickTreePath(t, a, imagePath)
+	if a.tree.SelectedPath != imagePath {
+		t.Fatalf("image selection = %q, want %q", a.tree.SelectedPath, imagePath)
+	}
+
+	active := a.activeTabPtr()
+	tabCount := len(a.tabs)
+	for _, tt := range []struct {
+		name string
+		path string
+	}{
+		{name: "folder", path: folder},
+		{name: "text", path: textPath},
+		{name: "image", path: imagePath},
+		{name: "unsupported", path: externalPath},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			rightClickTreePath(t, a, tt.path)
+			if a.tree.SelectedPath != tt.path {
+				t.Fatalf("right-click selection = %q, want %q", a.tree.SelectedPath, tt.path)
+			}
+			if len(a.tabs) != tabCount || a.activeTabPtr() != active {
+				t.Fatal("right-click should not activate or open a tab")
+			}
+		})
+	}
 }
 
 // TestSidebarClick_TextAndImageOpenTabs ensures supported inline file types
@@ -197,6 +327,281 @@ func TestSidebarClick_ExistingExternalTabIsNotActivated(t *testing.T) {
 		t.Fatalf("tree click activated external placeholder: tabs=%d active=%#v", len(a.tabs), a.activeTabPtr())
 	}
 	assertDefaultAppNotOpened(t, opened)
+}
+
+// TestUnsupportedFileContextActions_TargetClickedNode proves file-tree
+// actions retain their clicked-node target rather than falling back to the
+// active tab. Unsupported files never need to become tabs to be manageable.
+func TestUnsupportedFileContextActions_TargetClickedNode(t *testing.T) {
+	dir := t.TempDir()
+	activePath := filepath.Join(dir, "active.txt")
+	if err := os.WriteFile(activePath, []byte("active"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string]string{
+		"open":     filepath.Join(dir, "open.pdf"),
+		"rename":   filepath.Join(dir, "rename.pdf"),
+		"delete":   filepath.Join(dir, "delete.pdf"),
+		"relative": filepath.Join(dir, "relative.pdf"),
+		"absolute": filepath.Join(dir, "absolute.pdf"),
+	}
+	for _, path := range paths {
+		if err := os.WriteFile(path, []byte("%PDF-1.7"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	a := newTestApp(t, dir)
+	a.openFile(activePath)
+	active := a.activeTabPtr()
+	opened := make(chan string, 1)
+	a.openPath = func(path string) error {
+		opened <- path
+		return nil
+	}
+
+	rightClickTreePath(t, a, paths["open"])
+	activateContextItem(t, a, "Open with default app")
+	if a.confirmOpen || len(a.tabs) != 1 || a.activeTabPtr() != active {
+		t.Fatal("context default-open changed tab state or asked for confirmation")
+	}
+	select {
+	case got := <-opened:
+		if got != paths["open"] {
+			t.Fatalf("opened path = %q, want clicked node %q", got, paths["open"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("context default-open did not invoke opener")
+	}
+	a.handleEvent(waitForDefaultOpenDone(t, a))
+
+	rightClickTreePath(t, a, paths["rename"])
+	activateContextItem(t, a, "Rename file")
+	if !a.promptOpen {
+		t.Fatal("rename action did not open prompt")
+	}
+	renamed := filepath.Join(dir, "renamed.pdf")
+	a.promptValue = []rune(filepath.Base(renamed))
+	a.promptCursor = len(a.promptValue)
+	a.promptSubmit()
+	if _, err := os.Stat(renamed); err != nil {
+		t.Fatalf("renamed clicked node missing: %v", err)
+	}
+	if _, err := os.Stat(paths["rename"]); !os.IsNotExist(err) {
+		t.Fatalf("original clicked node still exists: %v", err)
+	}
+	if len(a.tabs) != 1 || a.activeTabPtr() != active {
+		t.Fatal("rename changed active tab")
+	}
+
+	rightClickTreePath(t, a, paths["delete"])
+	activateContextItem(t, a, "Delete file")
+	if !a.confirmOpen || a.confirmTitle != "Delete file" {
+		t.Fatalf("delete confirm = open %v title %q", a.confirmOpen, a.confirmTitle)
+	}
+	a.confirmHover = 1
+	a.confirmYes()
+	if _, err := os.Stat(paths["delete"]); !os.IsNotExist(err) {
+		t.Fatalf("clicked node was not deleted: %v", err)
+	}
+	if len(a.tabs) != 1 || a.activeTabPtr() != active {
+		t.Fatal("delete changed active tab")
+	}
+
+	var copied []string
+	a.copyToSystem = func(path string) error {
+		copied = append(copied, path)
+		return nil
+	}
+	rightClickTreePath(t, a, paths["relative"])
+	activateContextItem(t, a, "Copy relative path")
+	rightClickTreePath(t, a, paths["absolute"])
+	activateContextItem(t, a, "Copy absolute path")
+	wantCopied := []string{filepath.Base(paths["relative"]), paths["absolute"]}
+	if len(copied) != len(wantCopied) {
+		t.Fatalf("clipboard writes = %v, want %v", copied, wantCopied)
+	}
+	for i, want := range wantCopied {
+		if copied[i] != want {
+			t.Errorf("clipboard write %d = %q, want clicked node %q", i, copied[i], want)
+		}
+	}
+	if len(a.tabs) != 1 || a.activeTabPtr() != active {
+		t.Fatal("copy action changed active tab")
+	}
+}
+
+// TestMenuFileActions_TargetSelectedUnsupportedTreeFile proves that the five
+// file actions in the main menu use the selected tree file, even though an
+// unsupported file has no tab and a different text tab is active.
+func TestMenuFileActions_TargetSelectedUnsupportedTreeFile(t *testing.T) {
+	dir := t.TempDir()
+	activePath := filepath.Join(dir, "active.txt")
+	if err := os.WriteFile(activePath, []byte("active"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string]string{
+		"open":     filepath.Join(dir, "open.pdf"),
+		"rename":   filepath.Join(dir, "rename.pdf"),
+		"delete":   filepath.Join(dir, "delete.pdf"),
+		"relative": filepath.Join(dir, "relative.pdf"),
+		"absolute": filepath.Join(dir, "absolute.pdf"),
+	}
+	for _, path := range paths {
+		if err := os.WriteFile(path, []byte("%PDF-1.7"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	withoutTab := newTestApp(t, dir)
+	withoutTab.tree.SelectedPath = paths["open"]
+	for _, label := range []string{
+		"Open with default app",
+		"Rename file",
+		"Delete file",
+		"Copy relative path",
+		"Copy absolute path",
+	} {
+		if !menuItemByLabel(t, withoutTab, label).enabled(withoutTab) {
+			t.Fatalf("%q should be enabled for selected unsupported file without a tab", label)
+		}
+	}
+
+	a := newTestApp(t, dir)
+	a.openFile(activePath)
+	active := a.activeTabPtr()
+	opened := make(chan string, 1)
+	a.openPath = func(path string) error {
+		opened <- path
+		return nil
+	}
+
+	a.tree.SelectedPath = paths["open"]
+	menuItemByLabel(t, a, "Open with default app").action(a)
+	select {
+	case got := <-opened:
+		if got != paths["open"] {
+			t.Fatalf("opened path = %q, want selected path %q", got, paths["open"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("main-menu default-open did not invoke opener")
+	}
+	a.handleEvent(waitForDefaultOpenDone(t, a))
+
+	a.tree.SelectedPath = paths["rename"]
+	menuItemByLabel(t, a, "Rename file").action(a)
+	if !a.promptOpen {
+		t.Fatal("main-menu rename did not open prompt")
+	}
+	a.promptValue = []rune("renamed.pdf")
+	a.promptCursor = len(a.promptValue)
+	a.promptSubmit()
+	renamed := filepath.Join(dir, "renamed.pdf")
+	if _, err := os.Stat(renamed); err != nil {
+		t.Fatalf("renamed selected file missing: %v", err)
+	}
+
+	a.tree.SelectedPath = paths["delete"]
+	menuItemByLabel(t, a, "Delete file").action(a)
+	if !a.confirmOpen || a.confirmTitle != "Delete file" {
+		t.Fatalf("delete confirm = open %v title %q", a.confirmOpen, a.confirmTitle)
+	}
+	a.confirmHover = 1
+	a.confirmYes()
+	if _, err := os.Stat(paths["delete"]); !os.IsNotExist(err) {
+		t.Fatalf("selected file was not deleted: %v", err)
+	}
+
+	var copied []string
+	a.copyToSystem = func(path string) error {
+		copied = append(copied, path)
+		return nil
+	}
+	a.tree.SelectedPath = paths["relative"]
+	menuItemByLabel(t, a, "Copy relative path").action(a)
+	a.tree.SelectedPath = paths["absolute"]
+	menuItemByLabel(t, a, "Copy absolute path").action(a)
+	if got, want := copied, []string{filepath.Base(paths["relative"]), paths["absolute"]}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("clipboard writes = %v, want %v", got, want)
+	}
+	if a.activeTabPtr() != active {
+		t.Fatal("selected-tree file actions changed the unrelated active tab")
+	}
+}
+
+// TestMenuFileAndFolderEnablement_FollowsSelectedTreeNode makes explicit
+// selection authoritative: files enable file rows, selected folders enable
+// folder rows, and neither the root nor a file can borrow activeFolder.
+func TestMenuFileAndFolderEnablement_FollowsSelectedTreeNode(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "selected")
+	otherFolder := filepath.Join(dir, "other")
+	file := filepath.Join(dir, "selected.pdf")
+	for _, path := range []string{folder, otherFolder} {
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(file, []byte("%PDF-1.7"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	a.setActiveFolder(otherFolder)
+	folderMenuItem := func(prefix string) menuItemDef {
+		t.Helper()
+		items, _, _ := a.menuLayout()
+		for _, item := range items {
+			label := item.label
+			if item.labelFor != nil {
+				label = item.labelFor(a)
+			}
+			if strings.HasPrefix(label, prefix) {
+				return item
+			}
+		}
+		t.Fatalf("folder action with prefix %q not found", prefix)
+		return menuItemDef{}
+	}
+
+	a.tree.SelectedPath = folder
+	if !a.hasActiveSubfolder() {
+		t.Fatal("selected subfolder should enable folder actions")
+	}
+	for _, prefix := range []string{"Rename folder", "Delete folder"} {
+		if !folderMenuItem(prefix).enabled(a) {
+			t.Fatalf("%s should be enabled for selected folder", prefix)
+		}
+	}
+	for _, label := range []string{"Open with default app", "Rename file", "Delete file", "Copy relative path", "Copy absolute path"} {
+		if menuItemByLabel(t, a, label).enabled(a) {
+			t.Fatalf("%q should be disabled for selected folder", label)
+		}
+	}
+
+	a.tree.SelectedPath = file
+	if a.hasActiveSubfolder() {
+		t.Fatal("selected file must disable folder actions even with an active subfolder")
+	}
+	for _, prefix := range []string{"Rename folder", "Delete folder"} {
+		if folderMenuItem(prefix).enabled(a) {
+			t.Fatalf("%s should be disabled for selected file", prefix)
+		}
+	}
+
+	a.tree.SelectedPath = a.tree.Root.Path
+	if a.hasActiveSubfolder() {
+		t.Fatal("project root must not enable folder actions")
+	}
+	for _, prefix := range []string{"Rename folder", "Delete folder"} {
+		if folderMenuItem(prefix).enabled(a) {
+			t.Fatalf("%s should be disabled for selected project root", prefix)
+		}
+	}
+	for _, label := range []string{"Open with default app", "Rename file", "Delete file", "Copy relative path", "Copy absolute path"} {
+		if menuItemByLabel(t, a, label).enabled(a) {
+			t.Fatalf("%q should be disabled for selected project root", label)
+		}
+	}
 }
 
 // TestOpenFile_ExternalInvokesOpenerAndReusesTab covers automatic handoff on

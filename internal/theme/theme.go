@@ -48,8 +48,9 @@ type Theme struct {
 	FindCurrent tcell.Color
 
 	// --- File tree ---
-	FolderColor tcell.Color
-	FileColor   tcell.Color
+	FolderColor  tcell.Color
+	FileColor    tcell.Color
+	TreeSelected tcell.Color // Exact selected tree node.
 
 	// --- Syntax highlighting ---
 	CodeText    tcell.Color // Neutral base text inside fenced code blocks.
@@ -100,8 +101,9 @@ func Default() Theme {
 		FindCurrent: tcell.NewRGBColor(0xe0, 0xaf, 0x68),
 
 		// Tree.
-		FolderColor: tcell.NewRGBColor(0x7a, 0xa2, 0xf7),
-		FileColor:   tcell.NewRGBColor(0xa9, 0xb1, 0xd6),
+		FolderColor:  tcell.NewRGBColor(0x7a, 0xa2, 0xf7),
+		FileColor:    tcell.NewRGBColor(0xa9, 0xb1, 0xd6),
+		TreeSelected: tcell.NewRGBColor(0xe0, 0xaf, 0x68),
 
 		// Syntax — Tokyo Night-ish.
 		CodeText:    tcell.NewRGBColor(0x8f, 0x98, 0xb8),
