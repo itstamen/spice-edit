@@ -15,8 +15,11 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/cloudmanic/spice-edit/internal/filetree"
 )
 
 // TestCreateEmptyFile_New writes a brand-new empty file and verifies it
@@ -527,6 +530,7 @@ func TestMenuDeleteFolder_KeepsNearestFolderSelectionWithSurvivingTab(t *testing
 	a.openFile(keep)
 	active := a.activeTabPtr()
 	a.setActiveFolder(victim)
+	a.tree.SelectedPath = victim
 
 	a.menuDeleteFolder()
 	if !a.confirmOpen {
@@ -673,6 +677,197 @@ func TestFileActionTarget_SelectionAndFallback(t *testing.T) {
 	a.tree = nil
 	if got, ok := a.fileActionTarget(); !ok || got != activePath {
 		t.Fatalf("single-file fallback = %q, %v; want %q, true", got, ok, activePath)
+	}
+}
+
+// TestFolderActions_RefuseAbsoluteTreeRootWithRelativeRootDir covers the
+// production `spiceedit .` shape: App.rootDir remains ".", but the tree and
+// active folder use absolute paths. The root must still be non-actionable.
+func TestFolderActions_RefuseAbsoluteTreeRootWithRelativeRootDir(t *testing.T) {
+	root := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+
+	a := newTestApp(t, ".")
+	a.rootDir = "."
+	a.setActiveFolder(a.tree.Root.Path)
+	a.tree.SelectedPath = a.tree.Root.Path
+	if _, ok := a.folderActionTarget(); ok {
+		t.Fatal("absolute tree root must not be a folder action target")
+	}
+	if a.hasActiveSubfolder() {
+		t.Fatal("absolute tree root must disable folder actions")
+	}
+	if got := a.renameFolderLabel(); got != "Rename folder" {
+		t.Fatalf("rename root label = %q", got)
+	}
+	if got := a.deleteFolderLabel(); got != "Delete folder" {
+		t.Fatalf("delete root label = %q", got)
+	}
+
+	a.menuRenameFolder()
+	if a.promptOpen {
+		t.Fatal("root should not open rename prompt")
+	}
+	a.menuDeleteFolder()
+	if a.confirmOpen {
+		t.Fatal("root should not open delete confirmation")
+	}
+	if _, err := os.Stat(a.tree.Root.Path); err != nil {
+		t.Fatalf("project root was harmed: %v", err)
+	}
+}
+
+// TestDirectorySymlink_UsesFileActionsWithoutFollowingTarget ensures a tree
+// node classified as a file stays a file action target even when its symlink
+// destination is a directory. Deleting it must unlink only the symlink.
+func TestDirectorySymlink_UsesFileActionsWithoutFollowingTarget(t *testing.T) {
+	root := t.TempDir()
+	targetDir := filepath.Join(root, "target")
+	marker := filepath.Join(targetDir, "keep.txt")
+	link := filepath.Join(root, "linked-dir")
+	if err := os.Mkdir(targetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(targetDir, link); err != nil {
+		if runtime.GOOS == "windows" || os.IsPermission(err) {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	a := newTestApp(t, root)
+	var node *filetree.Node
+	for _, child := range a.tree.Root.Children {
+		if child.Path == link {
+			node = child
+			break
+		}
+	}
+	if node == nil || node.IsDir {
+		t.Fatalf("directory symlink node = %#v, want non-directory node", node)
+	}
+	a.setActiveFolder(targetDir)
+	a.tree.SelectedPath = node.Path
+	if got, ok := a.fileActionTarget(); !ok || got != link {
+		t.Fatalf("file target = %q, %v; want symlink %q, true", got, ok, link)
+	}
+	if _, ok := a.folderActionTarget(); ok || a.hasActiveSubfolder() {
+		t.Fatal("directory symlink must disable folder actions")
+	}
+	for _, label := range []string{"Open with default app", "Rename file", "Delete file", "Copy relative path", "Copy absolute path"} {
+		if !menuItemByLabel(t, a, label).enabled(a) {
+			t.Fatalf("%q should be enabled for directory symlink", label)
+		}
+	}
+
+	a.menuDelete()
+	if !a.confirmOpen {
+		t.Fatal("symlink delete should open file confirmation")
+	}
+	a.confirmHover = 1
+	a.confirmYes()
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("symlink still exists after delete: %v", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("symlink target was deleted: %v", err)
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("symlink parent was deleted: %v", err)
+	}
+}
+
+// TestFileActions_RejectDirectoryReplacementAfterConfirmation preserves a
+// directory created after the file action was armed. Rename and both delete
+// entry points must reject the replacement rather than mutating or removing it.
+func TestFileActions_RejectDirectoryReplacementAfterConfirmation(t *testing.T) {
+	root := t.TempDir()
+	a := newTestApp(t, root)
+	replaceWithDirectory := func(t *testing.T, path string) string {
+		t.Helper()
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		marker := filepath.Join(path, "keep.txt")
+		if err := os.WriteFile(marker, []byte("keep"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return marker
+	}
+	assertReplacementSurvived := func(t *testing.T, path, marker string) {
+		t.Helper()
+		if info, err := os.Stat(path); err != nil || !info.IsDir() {
+			t.Fatalf("replacement directory = %v, %v; want live directory", info, err)
+		}
+		if _, err := os.Stat(marker); err != nil {
+			t.Fatalf("replacement contents were removed: %v", err)
+		}
+	}
+
+	renamePath := filepath.Join(root, "rename.txt")
+	if err := os.WriteFile(renamePath, []byte("file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a.tree.SelectedPath = renamePath
+	a.menuRename()
+	if !a.promptOpen {
+		t.Fatal("rename should open prompt before replacement")
+	}
+	renameMarker := replaceWithDirectory(t, renamePath)
+	a.promptValue = []rune("renamed.txt")
+	a.promptCursor = len(a.promptValue)
+	a.promptSubmit()
+	assertReplacementSurvived(t, renamePath, renameMarker)
+	if _, err := os.Stat(filepath.Join(root, "renamed.txt")); !os.IsNotExist(err) {
+		t.Fatalf("rename created destination from replacement: %v", err)
+	}
+	if !strings.Contains(a.statusMsg, "Rename failed") {
+		t.Fatalf("rename replacement status = %q", a.statusMsg)
+	}
+
+	menuDeletePath := filepath.Join(root, "menu-delete.txt")
+	if err := os.WriteFile(menuDeletePath, []byte("file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a.tree.SelectedPath = menuDeletePath
+	a.menuDelete()
+	if !a.confirmOpen {
+		t.Fatal("menu delete should open confirmation before replacement")
+	}
+	menuMarker := replaceWithDirectory(t, menuDeletePath)
+	a.confirmHover = 1
+	a.confirmYes()
+	assertReplacementSurvived(t, menuDeletePath, menuMarker)
+	if !strings.Contains(a.statusMsg, "Delete failed") {
+		t.Fatalf("menu delete replacement status = %q", a.statusMsg)
+	}
+
+	contextDeletePath := filepath.Join(root, "context-delete.txt")
+	if err := os.WriteFile(contextDeletePath, []byte("file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctxDelete(a, &filetree.Node{Path: contextDeletePath, Name: filepath.Base(contextDeletePath)})
+	if !a.confirmOpen {
+		t.Fatal("context delete should open confirmation before replacement")
+	}
+	contextMarker := replaceWithDirectory(t, contextDeletePath)
+	a.confirmHover = 1
+	a.confirmYes()
+	assertReplacementSurvived(t, contextDeletePath, contextMarker)
+	if !strings.Contains(a.statusMsg, "Delete failed") {
+		t.Fatalf("context delete replacement status = %q", a.statusMsg)
 	}
 }
 

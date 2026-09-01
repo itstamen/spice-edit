@@ -250,6 +250,15 @@ func (a *App) doRenameFile(oldPath, newName string) {
 		a.flash("File name can't contain a path separator")
 		return
 	}
+	info, err := os.Lstat(oldPath)
+	if err != nil {
+		a.flash(fmt.Sprintf("Rename failed: %v", err))
+		return
+	}
+	if info.IsDir() {
+		a.flash("Rename failed: selected path is a directory")
+		return
+	}
 	newPath := filepath.Join(filepath.Dir(oldPath), newName)
 	if err := renameFile(oldPath, newPath); err != nil {
 		a.flash(fmt.Sprintf("Rename failed: %v", err))
@@ -291,6 +300,32 @@ func (a *App) doDeletePath(path string) {
 		a.flash(fmt.Sprintf("Delete failed: %v", err))
 		return
 	}
+	a.finishDeletePath(path)
+}
+
+// doDeleteFile removes a non-directory path after checking its current type.
+// It uses os.Remove rather than the folder path's recursive RemoveAll, so a
+// file-action callback can never recursively delete a directory.
+func (a *App) doDeleteFile(path string) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		a.flash(fmt.Sprintf("Delete failed: %v", err))
+		return
+	}
+	if info.IsDir() {
+		a.flash("Delete failed: selected path is a directory")
+		return
+	}
+	if err := os.Remove(path); err != nil {
+		a.flash(fmt.Sprintf("Delete failed: %v", err))
+		return
+	}
+	a.finishDeletePath(path)
+}
+
+// finishDeletePath updates editor state after either a file or folder was
+// successfully removed from disk.
+func (a *App) finishDeletePath(path string) {
 	selectedRemoved := a.tree != nil && tabPathRemoved(a.tree.SelectedPath, path)
 	activeFolderRemoved := tabPathRemoved(a.activeFolder, path)
 	for i := len(a.tabs) - 1; i >= 0; i-- {
@@ -428,10 +463,11 @@ func (a *App) newFileLabel() string {
 // or just the basename when folder is the root itself. Used in the New
 // File prompt's hint and the menu row's dynamic label.
 func (a *App) relativeFolderLabel(folder string) string {
-	if folder == a.rootDir {
-		return filepath.Base(a.rootDir) + string(filepath.Separator)
+	root := a.projectRootPath()
+	if folder == root {
+		return filepath.Base(root) + string(filepath.Separator)
 	}
-	rel, err := filepath.Rel(a.rootDir, folder)
+	rel, err := filepath.Rel(root, folder)
 	if err != nil || rel == "." {
 		return filepath.Base(folder) + string(filepath.Separator)
 	}
@@ -468,7 +504,7 @@ func (a *App) menuDelete() {
 		"Delete file",
 		"Permanently delete "+filepath.Base(target)+"?",
 		func(app *App) {
-			app.doDeletePath(target)
+			app.doDeleteFile(target)
 		},
 	)
 }
@@ -543,21 +579,14 @@ func (a *App) doRenameFolder(oldPath, newName string) {
 	a.flash(fmt.Sprintf("Renamed to %s", newName))
 }
 
-// menuRenameFolder opens a prompt pre-filled with the active
-// folder's basename and renames the directory on submit. Mirrors
-// menuRename but targets a folder rather than a file. The project
-// root is gated out by hasActiveSubfolder so this never fires when
-// rooted on the working dir itself.
+// menuRenameFolder opens a prompt pre-filled with the resolved folder target's
+// basename and renames that directory on submit.
 func (a *App) menuRenameFolder() {
 	a.closeMenu()
-	folder := a.activeFolder
-	if folder == "" || folder == a.rootDir {
+	old, ok := a.folderActionTarget()
+	if !ok {
 		return
 	}
-	if info, err := os.Stat(folder); err != nil || !info.IsDir() {
-		return
-	}
-	old := folder
 	a.openPrompt(
 		"Rename folder",
 		"in "+filepath.Dir(old),
@@ -573,8 +602,8 @@ func (a *App) menuRenameFolder() {
 // "(subdir/)" suffix otherwise. Without the suffix the user would
 // have no way to tell what's about to be renamed before clicking.
 func (a *App) renameFolderLabel() string {
-	folder := a.activeFolder
-	if folder == "" || folder == a.rootDir {
+	folder, ok := a.folderActionTarget()
+	if !ok {
 		return "Rename folder"
 	}
 	rel := a.relativeFolderLabel(folder)
@@ -582,27 +611,20 @@ func (a *App) renameFolderLabel() string {
 	return "Rename folder" + folderLabelSuffix(" (", rel, maxLen)
 }
 
-// menuDeleteFolder removes the editor's active folder (the same folder
-// the New File entry targets) and everything inside it. Lives in the
-// main menu so folder deletion has a discoverable, non-right-click
-// path — macOS Terminal eats Button3, and the project's CLAUDE.md
-// rule says every file action must be reachable from the ≡ menu.
+// menuDeleteFolder removes the resolved folder target and everything inside
+// it. Lives in the main menu so folder deletion has a discoverable,
+// non-right-click path — macOS Terminal eats Button3, and the project's
+// CLAUDE.md rule says every file action must be reachable from the ≡ menu.
 //
 // The project root is never deletable — hasActiveSubfolder gates the
 // row out for that case so the user can't even see the action when
 // it would be destructive enough to take down the whole session.
 func (a *App) menuDeleteFolder() {
 	a.closeMenu()
-	folder := a.activeFolder
-	if folder == "" || folder == a.rootDir {
+	target, ok := a.folderActionTarget()
+	if !ok {
 		return
 	}
-	if info, err := os.Stat(folder); err != nil || !info.IsDir() {
-		// The active folder vanished externally — bail rather than
-		// flashing a confusing "Delete failed" once the confirm fires.
-		return
-	}
-	target := folder
 	a.openConfirm(
 		"Delete folder",
 		"Permanently delete "+filepath.Base(target)+" and everything inside?",
@@ -618,8 +640,8 @@ func (a *App) menuDeleteFolder() {
 // the user can tell at a glance what's about to vanish before they
 // even open the confirm dialog.
 func (a *App) deleteFolderLabel() string {
-	folder := a.activeFolder
-	if folder == "" || folder == a.rootDir {
+	folder, ok := a.folderActionTarget()
+	if !ok {
 		return "Delete folder"
 	}
 	rel := a.relativeFolderLabel(folder)
@@ -664,19 +686,10 @@ func trailingCells(text string, maxCells int) string {
 }
 
 // hasActiveSubfolder is the menu predicate shared by every "act on folder"
-// row (Delete, Rename, …). With an explicit tree selection, only the selected
-// non-root directory qualifies; otherwise it preserves the active-folder
-// fallback used before tree selection existed.
+// row (Delete, Rename, …).
 func (a *App) hasActiveSubfolder() bool {
-	folder := a.activeFolder
-	if a.tree != nil && a.tree.SelectedPath != "" {
-		folder = a.tree.SelectedPath
-	}
-	if folder == "" || folder == a.rootDir {
-		return false
-	}
-	info, err := os.Stat(folder)
-	return err == nil && info.IsDir()
+	_, ok := a.folderActionTarget()
+	return ok
 }
 
 // -----------------------------------------------------------------------------
@@ -855,6 +868,10 @@ func ctxDelete(a *App, n *filetree.Node) {
 		msg = "Permanently delete " + n.Name + " and everything inside?"
 	}
 	a.openConfirm(title, msg, func(app *App) {
-		app.doDeletePath(target)
+		if n.IsDir {
+			app.doDeletePath(target)
+			return
+		}
+		app.doDeleteFile(target)
 	})
 }

@@ -2900,6 +2900,20 @@ func (a *App) hasFileTab() bool {
 	return t != nil && t.Path != ""
 }
 
+// projectRootPath returns the absolute project root used for filesystem
+// comparisons. In project mode the tree root is already absolute and remains
+// authoritative when App.rootDir retains user input such as ".".
+func (a *App) projectRootPath() string {
+	root := a.rootDir
+	if a.tree != nil && a.tree.Root != nil && a.tree.Root.Path != "" {
+		root = a.tree.Root.Path
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		return abs
+	}
+	return root
+}
+
 // fileActionTarget resolves the file used by the main menu's file actions.
 // An explicit tree selection is authoritative: only an existing non-directory
 // file may be used, and an invalid selection must not redirect an action to an
@@ -2908,7 +2922,7 @@ func (a *App) hasFileTab() bool {
 func (a *App) fileActionTarget() (string, bool) {
 	if a.tree != nil && a.tree.SelectedPath != "" {
 		path := a.tree.SelectedPath
-		info, err := os.Stat(path)
+		info, err := os.Lstat(path)
 		if err != nil || info.IsDir() {
 			return "", false
 		}
@@ -2927,6 +2941,29 @@ func (a *App) fileActionTarget() (string, bool) {
 func (a *App) hasFileActionTarget() bool {
 	_, ok := a.fileActionTarget()
 	return ok
+}
+
+// folderActionTarget resolves the folder used by the main menu's folder
+// actions. An explicit tree selection is authoritative just as it is for
+// files. Lstat deliberately classifies directory symlinks as file targets so
+// deleting one removes the link rather than traversing its destination.
+func (a *App) folderActionTarget() (string, bool) {
+	folder := a.activeFolder
+	if a.tree != nil && a.tree.SelectedPath != "" {
+		folder = a.tree.SelectedPath
+	}
+	if folder == "" {
+		return "", false
+	}
+	absFolder, err := filepath.Abs(folder)
+	if err != nil || absFolder == a.projectRootPath() {
+		return "", false
+	}
+	info, err := os.Lstat(absFolder)
+	if err != nil || !info.IsDir() {
+		return "", false
+	}
+	return absFolder, true
 }
 
 // hasSelection reports whether the active tab has a non-empty selection.
