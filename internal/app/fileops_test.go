@@ -304,6 +304,56 @@ func TestDoRenameFolder_RewritesDescendantTabPaths(t *testing.T) {
 	if want := filepath.Join(root, "renamed"); a.activeFolder != want {
 		t.Fatalf("activeFolder: got %q, want %q", a.activeFolder, want)
 	}
+	if want := filepath.Join(root, "renamed", "deep", "leaf.go"); a.tree.SelectedPath != want {
+		t.Fatalf("SelectedPath: got %q, want %q", a.tree.SelectedPath, want)
+	}
+}
+
+// TestDoRenameFolder_MigratesSelectionWithoutTabs keeps a folder or text-file
+// selection attached to the renamed filesystem node when no editor tab exists.
+func TestDoRenameFolder_MigratesSelectionWithoutTabs(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		selected func(oldDir string) string
+		want     func(newDir string) string
+	}{
+		{
+			name:     "folder",
+			selected: func(oldDir string) string { return oldDir },
+			want:     func(newDir string) string { return newDir },
+		},
+		{
+			name:     "text descendant",
+			selected: func(oldDir string) string { return filepath.Join(oldDir, "notes.txt") },
+			want:     func(newDir string) string { return filepath.Join(newDir, "notes.txt") },
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			oldDir := filepath.Join(root, "old")
+			if err := os.Mkdir(oldDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(oldDir, "notes.txt"), []byte("notes"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			a := newTestApp(t, root)
+			a.setActiveFolder(oldDir)
+			a.tree.SelectedPath = tt.selected(oldDir)
+
+			a.doRenameFolder(oldDir, "new")
+			newDir := filepath.Join(root, "new")
+			if len(a.tabs) != 0 {
+				t.Fatalf("rename opened %d tabs", len(a.tabs))
+			}
+			if a.activeFolder != newDir {
+				t.Fatalf("activeFolder = %q, want %q", a.activeFolder, newDir)
+			}
+			if got, want := a.tree.SelectedPath, tt.want(newDir); got != want {
+				t.Fatalf("SelectedPath = %q, want %q", got, want)
+			}
+		})
+	}
 }
 
 func TestDoRenameFileInvalidatesHighlightPath(t *testing.T) {

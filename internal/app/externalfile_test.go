@@ -173,6 +173,41 @@ func TestSidebarClick_ExternalCancelAndRepeat(t *testing.T) {
 	assertDefaultAppNotOpened(t, opened)
 }
 
+// TestDoRenameFolder_PreservesCancelledExternalSelection verifies a selected
+// unsupported file follows a parent-folder rename even though it has no tab.
+func TestDoRenameFolder_PreservesCancelledExternalSelection(t *testing.T) {
+	dir := t.TempDir()
+	oldDir := filepath.Join(dir, "old")
+	if err := os.Mkdir(oldDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(oldDir, "manual.pdf")
+	if err := os.WriteFile(target, []byte("%PDF-1.7"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+
+	clickTreePath(t, a, oldDir)
+	clickTreePath(t, a, target)
+	if !a.confirmOpen || a.tree.SelectedPath != target || a.activeFolder != oldDir {
+		t.Fatalf("external click state: confirm=%v selected=%q folder=%q", a.confirmOpen, a.tree.SelectedPath, a.activeFolder)
+	}
+	a.confirmCancel()
+	if len(a.tabs) != 0 {
+		t.Fatalf("cancelled external file opened %d tabs", len(a.tabs))
+	}
+
+	a.doRenameFolder(oldDir, "new")
+	newDir := filepath.Join(dir, "new")
+	want := filepath.Join(newDir, "manual.pdf")
+	if a.activeFolder != newDir {
+		t.Fatalf("activeFolder = %q, want %q", a.activeFolder, newDir)
+	}
+	if a.tree.SelectedPath != want {
+		t.Fatalf("SelectedPath = %q, want %q", a.tree.SelectedPath, want)
+	}
+}
+
 // TestTreeClicks_SelectExactNode checks that both mouse buttons select the
 // clicked folder or supported/unsupported file without right-clicking into a
 // different editor tab.

@@ -501,6 +501,10 @@ func (a *App) doRenameFolder(oldPath, newName string) {
 		a.flash(fmt.Sprintf("Rename failed: %v", err))
 		return
 	}
+	selectedPath := ""
+	if a.tree != nil {
+		selectedPath = a.tree.SelectedPath
+	}
 	prefix := oldPath + string(filepath.Separator)
 	for _, t := range a.tabs {
 		switch {
@@ -529,11 +533,11 @@ func (a *App) doRenameFolder(oldPath, newName string) {
 			a.setActiveFolder(filepath.Join(newPath, a.activeFolder[len(prefix):]))
 		}
 	}
-	if a.tree != nil && (a.tree.SelectedPath == oldPath || strings.HasPrefix(a.tree.SelectedPath, prefix)) {
-		if a.tree.SelectedPath == oldPath {
+	if a.tree != nil && (selectedPath == oldPath || strings.HasPrefix(selectedPath, prefix)) {
+		if selectedPath == oldPath {
 			a.tree.SelectedPath = newPath
 		} else {
-			a.tree.SelectedPath = filepath.Join(newPath, a.tree.SelectedPath[len(prefix):])
+			a.tree.SelectedPath = filepath.Join(newPath, selectedPath[len(prefix):])
 		}
 	}
 	a.refreshTree()
