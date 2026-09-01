@@ -58,11 +58,16 @@ type Tree struct {
 
 	// ActiveFolder is the absolute path of the folder the user is
 	// currently "working in" — the default target for actions like New
-	// File. The Render() method bolds the matching row so the choice is
-	// always visible. The app updates this whenever the user clicks a
-	// tree node or opens a file.
+	// File. It remains the rendering fallback while SelectedPath is empty.
+	// The app updates this whenever the user clicks a tree node or opens a
+	// file.
 	ActiveFolder string
 	ActiveFile   string
+
+	// SelectedPath is the exact file or folder selected in the tree. Unlike
+	// ActiveFolder, which chooses the target for file operations, this field
+	// exists solely for tree selection rendering.
+	SelectedPath string
 
 	// DirtyFiles and DirtyFolders carry the project's git status — both
 	// indexed by absolute path. Files in DirtyFiles render in the theme's
@@ -233,13 +238,16 @@ func (t *Tree) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	// rows follow, so the highlight is honest.
 	headerStyle := tcell.StyleDefault.Background(bg).Foreground(th.Muted).Bold(true)
 	termtext.DrawString(scr, x, y, w, " EXPLORER", headerStyle)
-	rootActive := t.ActiveFolder == "" || t.ActiveFolder == t.Root.Path
-	rootStyle := tcell.StyleDefault.Background(bg).Foreground(th.Text).Bold(true)
-	if rootActive {
-		rootStyle = tcell.StyleDefault.Background(bg).Foreground(th.Accent).Bold(true)
+	rootSelected := t.SelectedPath == t.Root.Path
+	if t.SelectedPath == "" {
+		rootSelected = t.ActiveFolder == "" || t.ActiveFolder == t.Root.Path
 	}
+	rootStyle := tcell.StyleDefault.Background(bg).Foreground(th.Text).Bold(true)
 	if rootChange := t.DirtyFolders[t.Root.Path]; rootChange != GitChangeNone {
 		rootStyle = rootStyle.Foreground(gitChangeColor(th, rootChange))
+	}
+	if rootSelected {
+		rootStyle = rootStyle.Foreground(th.TreeSelected).Bold(true)
 	}
 	termtext.DrawString(scr, x, y+1, w, " "+t.Root.Name, rootStyle)
 
@@ -264,9 +272,12 @@ func (t *Tree) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 			continue
 		}
 		item := flat[idx]
-		active := item.Node.Path == t.ActiveFile || (item.Node.IsDir && item.Node.Path == t.ActiveFolder)
+		selected := item.Node.Path == t.SelectedPath
+		if t.SelectedPath == "" {
+			selected = item.Node.Path == t.ActiveFile || (item.Node.IsDir && item.Node.Path == t.ActiveFolder)
+		}
 		change := t.changeKind(item.Node)
-		drawNodeRow(scr, th, x, listTop+row, w, item, active, change, t.IconsEnabled)
+		drawNodeRow(scr, th, x, listTop+row, w, item, selected, change, t.IconsEnabled)
 		visible = append(visible, item.Node)
 	}
 	t.visible = visible
@@ -284,7 +295,7 @@ func (t *Tree) changeKind(n *Node) GitChangeKind {
 }
 
 // drawNodeRow renders one tree row with proper indent, chevron, and color.
-// active=true marks the active file or current working folder. change marks
+// selected=true marks the exact selected file or folder. change marks
 // uncommitted git status and overrides the normal foreground so changed names
 // stand out in the tree like other modern editors.
 // withIcons=true prefixes the name with a Nerd Font glyph + space; off
@@ -297,7 +308,7 @@ func (t *Tree) changeKind(n *Node) GitChangeKind {
 // styling. That's the visual cue you find in nvim-tree and friends:
 // a quick eye-scan picks out Go from Ruby from Markdown without
 // reading any text.
-func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, active bool, change GitChangeKind, withIcons bool) {
+func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, selected bool, change GitChangeKind, withIcons bool) {
 	bg := th.SidebarBG
 	indent := strings.Repeat("  ", item.Depth)
 
@@ -307,8 +318,8 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 	//   1. base = FolderColor / FileColor for the node type
 	//   2. dotfile/dotdir → Muted, so .gitignore / .github read as
 	//      "metadata, not source" without disappearing
-	//   3. active folder → Accent, so the current target is loud
-	//   4. dirty → Modified, so uncommitted work always stands out
+	//   3. dirty → Modified, so uncommitted work stands out
+	//   4. selected → TreeSelected, so exact selection is unambiguous
 	//
 	// Active/dirty deliberately override the dotfile dimming — a
 	// modified .env or the active .github/ folder is still the most
@@ -322,14 +333,14 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 	if strings.HasPrefix(item.Node.Name, ".") {
 		fg = th.Muted
 	}
-	if active {
-		fg = th.Accent
-	}
 	if change != GitChangeNone {
 		fg = gitChangeColor(th, change)
 	}
+	if selected {
+		fg = th.TreeSelected
+	}
 	rowStyle := tcell.StyleDefault.Background(bg).Foreground(fg)
-	if active {
+	if selected {
 		rowStyle = rowStyle.Bold(true)
 	}
 
@@ -356,11 +367,14 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 
 	glyph := icons.For(item.Node.Name, item.Node.IsDir, item.Node.Expanded)
 	glyphFg := icons.ColorFor(item.Node.Name, item.Node.IsDir, fg)
+	if selected {
+		glyphFg = fg
+	}
 	// Dirty files keep their per-language glyph colour — the language
 	// hue is the at-a-glance cue, and the name turning Modified is
 	// already enough to flag "this is dirty".
 	glyphStyle := tcell.StyleDefault.Background(bg).Foreground(glyphFg)
-	if active {
+	if selected {
 		glyphStyle = glyphStyle.Bold(true)
 	}
 

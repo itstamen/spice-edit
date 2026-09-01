@@ -268,6 +268,9 @@ func (a *App) doRenameFile(oldPath, newName string) {
 			t.DiskGone = false
 		}
 	}
+	if a.tree != nil && a.tree.SelectedPath == oldPath {
+		a.tree.SelectedPath = newPath
+	}
 	a.refreshTree()
 	a.refreshGitStatus()
 	a.invalidateFinder()
@@ -288,15 +291,47 @@ func (a *App) doDeletePath(path string) {
 		a.flash(fmt.Sprintf("Delete failed: %v", err))
 		return
 	}
+	selectedRemoved := a.tree != nil && tabPathRemoved(a.tree.SelectedPath, path)
 	for i := len(a.tabs) - 1; i >= 0; i-- {
 		if tabPathRemoved(a.tabs[i].Path, path) {
 			a.closeTab(i)
 		}
 	}
+	a.syncActiveFolderAfterDelete()
 	a.refreshTree()
 	a.refreshGitStatus()
 	a.invalidateFinder()
+	if selectedRemoved && a.tree != nil {
+		a.tree.SelectedPath = a.activeFolder
+	}
 	a.flash(fmt.Sprintf("Deleted %s", filepath.Base(path)))
+}
+
+// pathWithinRoot reports whether path is root itself or a descendant of root.
+func pathWithinRoot(path, root string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// syncActiveFolderAfterDelete moves a deleted working directory to the
+// nearest surviving parent, preserving a valid target for later file actions.
+func (a *App) syncActiveFolderAfterDelete() {
+	folder := a.activeFolder
+	if folder == "" {
+		folder = a.rootDir
+	}
+	for {
+		if info, err := os.Stat(folder); err == nil && info.IsDir() {
+			a.setActiveFolder(folder)
+			return
+		}
+		parent := filepath.Dir(folder)
+		if parent == folder || !pathWithinRoot(parent, a.rootDir) {
+			a.setActiveFolder(a.rootDir)
+			return
+		}
+		folder = parent
+	}
 }
 
 // -----------------------------------------------------------------------------
@@ -476,6 +511,13 @@ func (a *App) doRenameFolder(oldPath, newName string) {
 			a.setActiveFolder(newPath)
 		} else {
 			a.setActiveFolder(filepath.Join(newPath, a.activeFolder[len(prefix):]))
+		}
+	}
+	if a.tree != nil && (a.tree.SelectedPath == oldPath || strings.HasPrefix(a.tree.SelectedPath, prefix)) {
+		if a.tree.SelectedPath == oldPath {
+			a.tree.SelectedPath = newPath
+		} else {
+			a.tree.SelectedPath = filepath.Join(newPath, a.tree.SelectedPath[len(prefix):])
 		}
 	}
 	a.refreshTree()
@@ -659,6 +701,10 @@ func ctxRename(a *App, n *filetree.Node) {
 		"in "+filepath.Dir(old),
 		n.Name,
 		func(app *App, value string) {
+			if n.IsDir {
+				app.doRenameFolder(old, value)
+				return
+			}
 			app.doRenameFile(old, value)
 		},
 	)

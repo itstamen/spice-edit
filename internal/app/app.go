@@ -1889,6 +1889,7 @@ func (a *App) tryTreeContextClick(x, y int) bool {
 	} else {
 		a.setActiveFolder(filepath.Dir(n.Path))
 	}
+	a.tree.SelectedPath = n.Path
 	a.openTreeContext(n, x, y)
 	return true
 }
@@ -1936,9 +1937,11 @@ func (a *App) sidebarClick(x, y int) {
 		return
 	}
 	if n == a.tree.Root {
+		a.tree.SelectedPath = n.Path
 		a.setActiveFolder(a.rootDir)
 		return
 	}
+	a.tree.SelectedPath = n.Path
 	if n.IsDir {
 		a.setActiveFolder(n.Path)
 		a.tree.Toggle(n)
@@ -1949,8 +1952,8 @@ func (a *App) sidebarClick(x, y int) {
 }
 
 // setActiveFolder records path as the editor's current working folder and
-// mirrors it onto the file tree so the matching row renders with the
-// "active" highlight. All writes to a.activeFolder go through here.
+// mirrors it onto the file tree. With no editor tab, it is also the fallback
+// exact tree selection. All writes to a.activeFolder go through here.
 func (a *App) setActiveFolder(path string) {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
@@ -1958,6 +1961,9 @@ func (a *App) setActiveFolder(path string) {
 	a.activeFolder = path
 	if a.tree != nil {
 		a.tree.ActiveFolder = path
+		if a.activeTabPtr() == nil {
+			a.tree.SelectedPath = path
+		}
 	}
 }
 
@@ -1991,9 +1997,11 @@ func (a *App) syncActiveTreeFile() {
 	tab := a.activeTabPtr()
 	if tab == nil || tab.Path == "" {
 		a.tree.ActiveFile = ""
+		a.tree.SelectedPath = a.activeFolder
 		return
 	}
 	a.tree.ActiveFile = tab.Path
+	a.tree.SelectedPath = tab.Path
 }
 
 // editorPress handles the initial mouse press inside the editor — placing
@@ -2285,6 +2293,7 @@ func (a *App) openFileWithExternalPolicy(path string, policy externalOpenPolicy)
 	a.setActiveFolder(filepath.Dir(path))
 	if a.tree != nil {
 		a.tree.ActiveFile = path
+		a.tree.SelectedPath = path
 		// Reveal the file's location in the sidebar: expand every ancestor
 		// directory and scroll the row into view. Without this, opening a
 		// file via the finder (Esc-p) or the command line leaves the tree

@@ -47,6 +47,7 @@ func TestDefault_AllColorsSet(t *testing.T) {
 		{"CodeText", th.CodeText},
 		{"FolderColor", th.FolderColor},
 		{"FileColor", th.FileColor},
+		{"TreeSelected", th.TreeSelected},
 		{"SynKeyword", th.SynKeyword},
 		{"SynString", th.SynString},
 		{"SynNumber", th.SynNumber},
@@ -66,6 +67,18 @@ func TestDefault_AllColorsSet(t *testing.T) {
 		if c.color == 0 {
 			t.Errorf("Default(): field %s is unset (zero color)", c.name)
 		}
+	}
+}
+
+// TestDefault_TreeSelectedIsDistinct requires a dedicated semantic colour for
+// the exact file-tree selection rather than reusing an incidental accent.
+func TestDefault_TreeSelectedIsDistinct(t *testing.T) {
+	th := Default()
+	if th.TreeSelected == tcell.ColorDefault {
+		t.Fatal("TreeSelected must be a concrete colour")
+	}
+	if th.TreeSelected == th.FileColor || th.TreeSelected == th.FolderColor {
+		t.Fatal("TreeSelected must stand apart from ordinary tree rows")
 	}
 }
 

@@ -525,6 +525,91 @@ func TestRender_ActiveFileIsBold(t *testing.T) {
 	}
 }
 
+// TestRender_SelectedRootUsesSelectionStyle verifies the project root is a
+// selectable node too, even when its git state would otherwise recolour it.
+func TestRender_SelectedRootUsesSelectionStyle(t *testing.T) {
+	root := mkTree(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	tr.SelectedPath = tr.Root.Path
+	tr.DirtyFolders = map[string]GitChangeKind{tr.Root.Path: GitChangeModified}
+
+	cells, w := renderAndCollect(t, tr, 40, 20)
+	th := theme.Default()
+	if !rowHasColor(cells, w, 1, th.TreeSelected) || !rowHasBold(cells, w, 1) {
+		t.Fatal("selected root must render TreeSelected and bold")
+	}
+}
+
+// TestRender_SelectedFileOverridesGitAndGlyphColour pins the exact selection
+// priority: it wins over git styling and applies to the enabled icon too.
+func TestRender_SelectedFileOverridesGitAndGlyphColour(t *testing.T) {
+	root := mkTree(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	alpha := findChild(tr.Root, "alpha")
+	if err := alpha.reload(); err != nil {
+		t.Fatalf("reload alpha: %v", err)
+	}
+	alpha.Expanded = true
+	inner := findChild(alpha, "inner.go")
+	tr.SelectedPath = inner.Path
+	tr.DirtyFiles = map[string]GitChangeKind{inner.Path: GitChangeModified}
+	tr.IconsEnabled = true
+
+	cells, w := renderAndCollect(t, tr, 40, 20)
+	rowY := findRowY(cells, w, 20, "inner.go")
+	if rowY < 0 {
+		t.Fatal("could not find selected file row")
+	}
+	th := theme.Default()
+	if !rowHasColor(cells, w, rowY, th.TreeSelected) || !rowHasBold(cells, w, rowY) {
+		t.Fatal("selected file must render TreeSelected and bold")
+	}
+	glyph := []rune(icons.For(inner.Name, inner.IsDir, inner.Expanded))[0]
+	for x := 0; x < w; x++ {
+		cell := cells[rowY*w+x]
+		if len(cell.Runes) == 0 || cell.Runes[0] != glyph {
+			continue
+		}
+		fg, _, _ := cell.Style.Decompose()
+		if fg != th.TreeSelected {
+			t.Fatalf("selected glyph foreground = %v, want %v", fg, th.TreeSelected)
+		}
+		return
+	}
+	t.Fatal("selected file glyph was not rendered")
+}
+
+// TestRender_SelectedPathHighlightsOnlyExactNode ensures an explicit
+// selection does not leave old active-file or active-folder rows highlighted.
+func TestRender_SelectedPathHighlightsOnlyExactNode(t *testing.T) {
+	root := mkTree(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	alpha := findChild(tr.Root, "alpha")
+	beta := findChild(tr.Root, "Beta")
+	tr.SelectedPath = alpha.Path
+	tr.ActiveFolder = beta.Path
+
+	cells, w := renderAndCollect(t, tr, 40, 20)
+	th := theme.Default()
+	alphaY := findRowY(cells, w, 20, "alpha")
+	betaY := findRowY(cells, w, 20, "Beta")
+	if !rowHasColor(cells, w, alphaY, th.TreeSelected) || !rowHasBold(cells, w, alphaY) {
+		t.Fatal("selected node must be highlighted")
+	}
+	if rowHasColor(cells, w, betaY, th.TreeSelected) || rowHasBold(cells, w, betaY) {
+		t.Fatal("unselected active folder must not be highlighted")
+	}
+}
+
 // TestRender_TinyHeightDoesNotPanic guards against an off-by-one when the
 // caller hands Render a height smaller than the 2-row header — listH goes
 // to zero and we shouldn't blow up dividing or indexing.
@@ -610,6 +695,7 @@ func TestRender_DirtyRootUsesModifiedColor(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	tr.DirtyFolders = map[string]GitChangeKind{tr.Root.Path: GitChangeModified}
+	tr.ActiveFolder = findChild(tr.Root, "alpha").Path
 
 	cells, w := renderAndCollect(t, tr, 40, 20)
 	if !rowHasColor(cells, w, 1, theme.Default().GitModified) {
@@ -617,10 +703,9 @@ func TestRender_DirtyRootUsesModifiedColor(t *testing.T) {
 	}
 }
 
-// TestRender_DirtyAndActiveStaysBold confirms that the active-folder
-// styling (bold) and the dirty-folder styling (Modified colour) compose
-// cleanly — the user shouldn't lose the "current target" cue just
-// because the folder also has uncommitted changes.
+// TestRender_DirtyAndActiveUsesSelectedColor confirms the legacy active-folder
+// fallback becomes an exact selection when no SelectedPath is set, so it still
+// wins over the dirty colour while remaining bold.
 func TestRender_DirtyAndActiveStaysBold(t *testing.T) {
 	root := mkTree(t)
 	tr, err := New(root)
@@ -636,8 +721,8 @@ func TestRender_DirtyAndActiveStaysBold(t *testing.T) {
 	if rowY < 0 {
 		t.Fatal("could not find alpha row")
 	}
-	if !rowHasColor(cells, w, rowY, theme.Default().GitModified) {
-		t.Error("expected alpha row to be Modified colour")
+	if !rowHasColor(cells, w, rowY, theme.Default().TreeSelected) {
+		t.Error("expected alpha row to use TreeSelected colour")
 	}
 	if !rowHasBold(cells, w, rowY) {
 		t.Error("expected alpha row to remain bold")

@@ -1505,6 +1505,66 @@ func TestSidebarClick_RootRowResetsActiveFolder(t *testing.T) {
 	if len(a.tabs) != 0 {
 		t.Errorf("clicking root opened tabs: %d", len(a.tabs))
 	}
+	if a.tree.SelectedPath != a.tree.Root.Path {
+		t.Errorf("root selection = %q, want %q", a.tree.SelectedPath, a.tree.Root.Path)
+	}
+}
+
+// TestTreeSelection_FollowsTabsAndFallsBackToFolder keeps the explicit tree
+// selection aligned with the editor only when a tab becomes active.
+func TestTreeSelection_FollowsTabsAndFallsBackToFolder(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.txt")
+	second := filepath.Join(dir, "second.txt")
+	for _, path := range []string{first, second} {
+		if err := os.WriteFile(path, []byte("seed"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := newTestApp(t, dir)
+	a.openFile(first)
+	a.openFile(second)
+	a.activeTab = 0
+	a.syncActiveTreeFile()
+	if a.tree.SelectedPath != first {
+		t.Fatalf("tab selection = %q, want %q", a.tree.SelectedPath, first)
+	}
+	a.closeTabs(append([]*editor.Tab(nil), a.tabs...))
+	if a.tree.SelectedPath != a.activeFolder {
+		t.Fatalf("empty-tab fallback = %q, want active folder %q", a.tree.SelectedPath, a.activeFolder)
+	}
+}
+
+// TestTreeSelection_FollowsRenameAndDelete keeps an explicit tree selection
+// valid after its node moves or vanishes from the filesystem.
+func TestTreeSelection_FollowsRenameAndDelete(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "docs")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(folder, "notes.txt")
+	if err := os.WriteFile(path, []byte("seed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	a.tree.SelectedPath = path
+	a.doRenameFile(path, "renamed.txt")
+	renamed := filepath.Join(folder, "renamed.txt")
+	if a.tree.SelectedPath != renamed {
+		t.Fatalf("renamed selection = %q, want %q", a.tree.SelectedPath, renamed)
+	}
+	a.doRenameFolder(folder, "archive")
+	archive := filepath.Join(dir, "archive")
+	archived := filepath.Join(archive, "renamed.txt")
+	if a.tree.SelectedPath != archived {
+		t.Fatalf("renamed folder selection = %q, want %q", a.tree.SelectedPath, archived)
+	}
+	a.setActiveFolder(archive)
+	a.doDeletePath(archive)
+	if a.tree.SelectedPath != dir {
+		t.Fatalf("deleted selection fallback = %q, want %q", a.tree.SelectedPath, dir)
+	}
 }
 
 // TestSelectWordAt selects the word under a buffer position.

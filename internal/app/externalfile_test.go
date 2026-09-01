@@ -124,6 +124,9 @@ func TestSidebarClick_ExternalCancelAndRepeat(t *testing.T) {
 	if len(a.tabs) != 1 || a.activeTabPtr() != original {
 		t.Fatalf("cancel changed tabs: count=%d active=%#v want=%#v", len(a.tabs), a.activeTabPtr(), original)
 	}
+	if a.tree.SelectedPath != target {
+		t.Fatalf("cancelled external selection = %q, want %q", a.tree.SelectedPath, target)
+	}
 	assertDefaultAppNotOpened(t, opened)
 
 	clickTreePath(t, a, target)
@@ -132,6 +135,59 @@ func TestSidebarClick_ExternalCancelAndRepeat(t *testing.T) {
 	}
 	a.confirmCancel()
 	assertDefaultAppNotOpened(t, opened)
+}
+
+// TestTreeClicks_SelectExactNode checks that both mouse buttons select the
+// clicked folder or supported/unsupported file without right-clicking into a
+// different editor tab.
+func TestTreeClicks_SelectExactNode(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "docs")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	textPath := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(textPath, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	imagePath := writeImageFixture(t, dir, "photo.png")
+	externalPath := filepath.Join(dir, "manual.pdf")
+	if err := os.WriteFile(externalPath, []byte("%PDF-1.7"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+
+	clickTreePath(t, a, folder)
+	if a.tree.SelectedPath != folder {
+		t.Fatalf("folder selection = %q, want %q", a.tree.SelectedPath, folder)
+	}
+	clickTreePath(t, a, textPath)
+	if a.tree.SelectedPath != textPath {
+		t.Fatalf("text selection = %q, want %q", a.tree.SelectedPath, textPath)
+	}
+	clickTreePath(t, a, imagePath)
+	if a.tree.SelectedPath != imagePath {
+		t.Fatalf("image selection = %q, want %q", a.tree.SelectedPath, imagePath)
+	}
+
+	a.draw()
+	sx, sy, _, sh := a.sidebarRect()
+	for y := sy; y < sy+sh; y++ {
+		n, ok := a.tree.HitTest(1, y-sy)
+		if ok && n.Path == externalPath {
+			if !a.tryTreeContextClick(sx+1, y) {
+				t.Fatal("right-click was not handled")
+			}
+			if a.tree.SelectedPath != externalPath {
+				t.Fatalf("right-click selection = %q, want %q", a.tree.SelectedPath, externalPath)
+			}
+			if a.activeTabPtr() == nil || a.activeTabPtr().Path != imagePath {
+				t.Fatal("right-click should not activate or open a tab")
+			}
+			return
+		}
+	}
+	t.Fatal("external path was not visible")
 }
 
 // TestSidebarClick_TextAndImageOpenTabs ensures supported inline file types
