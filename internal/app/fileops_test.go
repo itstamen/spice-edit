@@ -459,6 +459,77 @@ func TestMenuDeleteFolder_Confirms(t *testing.T) {
 	}
 }
 
+// TestMenuDeleteFolder_KeepsNearestFolderSelectionWithSurvivingTab verifies
+// the delete lifecycle leaves the working folder and tree selection together
+// when an unrelated editor tab survives.
+func TestMenuDeleteFolder_KeepsNearestFolderSelectionWithSurvivingTab(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "parent")
+	victim := filepath.Join(parent, "victim")
+	if err := os.MkdirAll(victim, 0o755); err != nil {
+		t.Fatalf("seed folder: %v", err)
+	}
+	keep := filepath.Join(root, "keep.txt")
+	if err := os.WriteFile(keep, []byte("keep"), 0o644); err != nil {
+		t.Fatalf("seed tab: %v", err)
+	}
+	a := newTestApp(t, root)
+	a.openFile(keep)
+	active := a.activeTabPtr()
+	a.setActiveFolder(victim)
+
+	a.menuDeleteFolder()
+	if !a.confirmOpen {
+		t.Fatal("expected confirm modal to open")
+	}
+	a.confirmHover = 1
+	a.confirmYes()
+
+	if a.activeTabPtr() != active || len(a.tabs) != 1 {
+		t.Fatal("unrelated tab should survive folder deletion")
+	}
+	if a.activeFolder != parent {
+		t.Fatalf("activeFolder = %q, want nearest surviving parent %q", a.activeFolder, parent)
+	}
+	if a.tree.SelectedPath != parent {
+		t.Fatalf("SelectedPath = %q, want active folder %q", a.tree.SelectedPath, parent)
+	}
+}
+
+// TestDeletePath_RelativeRootFallsBackToNearestParent covers the production
+// default rootDir="." case, where tree and active-folder paths are absolute.
+func TestDeletePath_RelativeRootFallsBackToNearestParent(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "parent")
+	victim := filepath.Join(parent, "victim")
+	if err := os.MkdirAll(victim, 0o755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+
+	a := newTestApp(t, ".")
+	a.rootDir = "." // Default project-mode root remains relative.
+	parent = filepath.Join(a.tree.Root.Path, "parent")
+	victim = filepath.Join(parent, "victim")
+	a.setActiveFolder(victim)
+	a.tree.SelectedPath = victim
+	a.doDeletePath(victim)
+
+	if a.activeFolder != parent {
+		t.Fatalf("activeFolder = %q, want nearest surviving parent %q", a.activeFolder, parent)
+	}
+	if a.tree.SelectedPath != parent {
+		t.Fatalf("SelectedPath = %q, want nearest surviving parent %q", a.tree.SelectedPath, parent)
+	}
+}
+
 // TestMenuDeleteFolder_RefusesRoot guards the most destructive
 // possibility: the project root must never be deletable from the
 // menu, even if some future caller manages to set activeFolder to

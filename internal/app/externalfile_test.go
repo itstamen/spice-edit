@@ -33,6 +33,23 @@ func clickTreePath(t *testing.T, a *App, path string) {
 	t.Fatalf("tree path %q was not visible", path)
 }
 
+// rightClickTreePath dispatches a tree context click for one visible path.
+func rightClickTreePath(t *testing.T, a *App, path string) {
+	t.Helper()
+	a.draw()
+	sx, sy, _, sh := a.sidebarRect()
+	for y := sy; y < sy+sh; y++ {
+		node, ok := a.tree.HitTest(1, y-sy)
+		if ok && node.Path == path {
+			if !a.tryTreeContextClick(sx+1, y) {
+				t.Fatalf("right-click tree path %q was not handled", path)
+			}
+			return
+		}
+	}
+	t.Fatalf("tree path %q was not visible", path)
+}
+
 // assertDefaultAppNotOpened gives the asynchronous opener enough time to run
 // and fails when a confirmation or inline-open path launches it unexpectedly.
 func assertDefaultAppNotOpened(t *testing.T, opened <-chan string) {
@@ -170,24 +187,27 @@ func TestTreeClicks_SelectExactNode(t *testing.T) {
 		t.Fatalf("image selection = %q, want %q", a.tree.SelectedPath, imagePath)
 	}
 
-	a.draw()
-	sx, sy, _, sh := a.sidebarRect()
-	for y := sy; y < sy+sh; y++ {
-		n, ok := a.tree.HitTest(1, y-sy)
-		if ok && n.Path == externalPath {
-			if !a.tryTreeContextClick(sx+1, y) {
-				t.Fatal("right-click was not handled")
+	active := a.activeTabPtr()
+	tabCount := len(a.tabs)
+	for _, tt := range []struct {
+		name string
+		path string
+	}{
+		{name: "folder", path: folder},
+		{name: "text", path: textPath},
+		{name: "image", path: imagePath},
+		{name: "unsupported", path: externalPath},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			rightClickTreePath(t, a, tt.path)
+			if a.tree.SelectedPath != tt.path {
+				t.Fatalf("right-click selection = %q, want %q", a.tree.SelectedPath, tt.path)
 			}
-			if a.tree.SelectedPath != externalPath {
-				t.Fatalf("right-click selection = %q, want %q", a.tree.SelectedPath, externalPath)
-			}
-			if a.activeTabPtr() == nil || a.activeTabPtr().Path != imagePath {
+			if len(a.tabs) != tabCount || a.activeTabPtr() != active {
 				t.Fatal("right-click should not activate or open a tab")
 			}
-			return
-		}
+		})
 	}
-	t.Fatal("external path was not visible")
 }
 
 // TestSidebarClick_TextAndImageOpenTabs ensures supported inline file types

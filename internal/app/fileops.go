@@ -292,6 +292,7 @@ func (a *App) doDeletePath(path string) {
 		return
 	}
 	selectedRemoved := a.tree != nil && tabPathRemoved(a.tree.SelectedPath, path)
+	activeFolderRemoved := tabPathRemoved(a.activeFolder, path)
 	for i := len(a.tabs) - 1; i >= 0; i-- {
 		if tabPathRemoved(a.tabs[i].Path, path) {
 			a.closeTab(i)
@@ -301,7 +302,7 @@ func (a *App) doDeletePath(path string) {
 	a.refreshTree()
 	a.refreshGitStatus()
 	a.invalidateFinder()
-	if selectedRemoved && a.tree != nil {
+	if (selectedRemoved || activeFolderRemoved) && a.tree != nil {
 		a.tree.SelectedPath = a.activeFolder
 	}
 	a.flash(fmt.Sprintf("Deleted %s", filepath.Base(path)))
@@ -309,7 +310,15 @@ func (a *App) doDeletePath(path string) {
 
 // pathWithinRoot reports whether path is root itself or a descendant of root.
 func pathWithinRoot(path, root string) bool {
-	rel, err := filepath.Rel(root, path)
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absRoot, absPath)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
@@ -317,8 +326,15 @@ func pathWithinRoot(path, root string) bool {
 // nearest surviving parent, preserving a valid target for later file actions.
 func (a *App) syncActiveFolderAfterDelete() {
 	folder := a.activeFolder
+	root := a.rootDir
+	if a.tree != nil && a.tree.Root != nil {
+		root = a.tree.Root.Path
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
 	if folder == "" {
-		folder = a.rootDir
+		folder = root
 	}
 	for {
 		if info, err := os.Stat(folder); err == nil && info.IsDir() {
@@ -326,8 +342,8 @@ func (a *App) syncActiveFolderAfterDelete() {
 			return
 		}
 		parent := filepath.Dir(folder)
-		if parent == folder || !pathWithinRoot(parent, a.rootDir) {
-			a.setActiveFolder(a.rootDir)
+		if parent == folder || !pathWithinRoot(parent, root) {
+			a.setActiveFolder(root)
 			return
 		}
 		folder = parent
@@ -591,10 +607,6 @@ func (a *App) menuDeleteFolder() {
 		"Permanently delete "+filepath.Base(target)+" and everything inside?",
 		func(app *App) {
 			app.doDeletePath(target)
-			// After the directory is gone we can't keep activeFolder
-			// pointing at it — fall back to the project root so the
-			// next New File doesn't try to write into a deleted dir.
-			app.setActiveFolder(app.rootDir)
 		},
 	)
 }
