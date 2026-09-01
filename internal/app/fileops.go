@@ -708,8 +708,12 @@ func ctxRename(a *App, n *filetree.Node) {
 		return
 	}
 	old := n.Path
+	title := "Rename file"
+	if n.IsDir {
+		title = "Rename folder"
+	}
 	a.openPrompt(
-		"Rename",
+		title,
 		"in "+filepath.Dir(old),
 		n.Name,
 		func(app *App, value string) {
@@ -722,6 +726,16 @@ func ctxRename(a *App, n *filetree.Node) {
 	)
 }
 
+// ctxOpenWithDefaultApp hands the clicked file to the host default
+// application. It deliberately bypasses tree-click confirmation because the
+// context-menu command is an explicit request and does not require a tab.
+func ctxOpenWithDefaultApp(a *App, n *filetree.Node) {
+	if n.IsDir {
+		return
+	}
+	a.openPathWithDefaultApp(n.Path)
+}
+
 // copyPathToSystemClipboard pushes path onto the host system clipboard via
 // OSC 52 and flashes a confirmation (or the underlying error) so the user
 // gets feedback — the OS clipboard is invisible from inside the TUI, and a
@@ -731,7 +745,11 @@ func ctxRename(a *App, n *filetree.Node) {
 // path" / "absolute path") so both menu paths share one helper without
 // duplicating copy.
 func (a *App) copyPathToSystemClipboard(path, label string) {
-	if err := clipboard.CopyToSystem(path); err != nil {
+	copyToSystem := a.copyToSystem
+	if copyToSystem == nil {
+		copyToSystem = clipboard.CopyToSystem
+	}
+	if err := copyToSystem(path); err != nil {
 		a.flash(fmt.Sprintf("Copy failed: %v", err))
 		return
 	}

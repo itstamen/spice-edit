@@ -770,15 +770,16 @@ func TestMenuCopyPath_NoTabSilent(t *testing.T) {
 // silent OSC 52 leaves the user wondering if the copy worked.
 func TestCopyPathToSystemClipboard_FlashMessage(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
-	a.copyPathToSystemClipboard("/tmp/sample.go", "relative path")
-	if a.statusMsg == "" {
-		t.Fatal("expected a status flash after copy")
+	var copied string
+	a.copyToSystem = func(path string) error {
+		copied = path
+		return nil
 	}
-	// Either success ("Copied …") or failure ("Copy failed: …") is
-	// acceptable here — the test environment may not have a usable
-	// /dev/tty. The contract is just "user gets feedback."
-	if !strings.Contains(a.statusMsg, "/tmp/sample.go") &&
-		!strings.Contains(a.statusMsg, "Copy failed") {
-		t.Fatalf("status flash didn't mention the path or an error: %q", a.statusMsg)
+	a.copyPathToSystemClipboard("/tmp/sample.go", "relative path")
+	if copied != "/tmp/sample.go" {
+		t.Fatalf("copied path = %q, want %q", copied, "/tmp/sample.go")
+	}
+	if got := a.statusMsg; got != "Copied relative path: /tmp/sample.go" {
+		t.Fatalf("status flash = %q", got)
 	}
 }

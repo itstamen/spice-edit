@@ -417,8 +417,8 @@ func TestHandleConfirmKey_AllBranches(t *testing.T) {
 	}
 }
 
-// TestOpenTreeContext_Folder offers New File + Rename + Delete plus the
-// two clipboard rows.
+// TestOpenTreeContext_Folder offers New File + folder actions plus the two
+// clipboard rows.
 func TestOpenTreeContext_Folder(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "child")
@@ -441,7 +441,7 @@ func TestOpenTreeContext_Folder(t *testing.T) {
 	if !a.contextOpen {
 		t.Fatal("context should open")
 	}
-	wantLabels := []string{"New File", "Rename", "Delete", "Copy rel path", "Copy abs path"}
+	wantLabels := []string{"New File", "Rename folder", "Delete folder", "Copy relative path", "Copy absolute path"}
 	if len(a.contextItems) != len(wantLabels) {
 		t.Fatalf("folder context should have %d items, got %d", len(wantLabels), len(a.contextItems))
 	}
@@ -452,8 +452,8 @@ func TestOpenTreeContext_Folder(t *testing.T) {
 	}
 }
 
-// TestOpenTreeContext_File offers Rename + Delete plus the two clipboard
-// rows. New File is folder-only.
+// TestOpenTreeContext_File offers every file operation with full labels.
+// New File remains folder-only.
 func TestOpenTreeContext_File(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "f.txt")
@@ -472,7 +472,7 @@ func TestOpenTreeContext_File(t *testing.T) {
 		t.Fatal("file node not in tree")
 	}
 	a.openTreeContext(node, 5, 5)
-	wantLabels := []string{"Rename", "Delete", "Copy rel path", "Copy abs path"}
+	wantLabels := []string{"Open with default app", "Rename file", "Delete file", "Copy relative path", "Copy absolute path"}
 	if len(a.contextItems) != len(wantLabels) {
 		t.Fatalf("file context should have %d items, got %d", len(wantLabels), len(a.contextItems))
 	}
@@ -488,7 +488,7 @@ func TestOpenTreeContext_File(t *testing.T) {
 func TestOpenTreeContext_Root(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.openTreeContext(a.tree.Root, 5, 5)
-	wantLabels := []string{"New File", "Copy rel path", "Copy abs path"}
+	wantLabels := []string{"New File", "Copy relative path", "Copy absolute path"}
 	if len(a.contextItems) != len(wantLabels) {
 		t.Fatalf("root context should have %d items, got %d", len(wantLabels), len(a.contextItems))
 	}
@@ -685,8 +685,24 @@ func TestContextRect(t *testing.T) {
 	a.contextX, a.contextY = 10, 5
 	a.contextItems = []contextItem{{label: "a"}, {label: "b"}}
 	x, y, w, h := a.contextRect()
-	if x != 10 || y != 5 || w != contextMenuWidth || h != 4 {
+	if x != 10 || y != 5 || w != 26 || h != 4 {
 		t.Fatalf("contextRect: (%d,%d,%d,%d)", x, y, w, h)
+	}
+}
+
+// TestContextMenuWidth_FitsFullFileLabels keeps file-node actions visible
+// without relying on drawAtWidth truncation.
+func TestContextMenuWidth_FitsFullFileLabels(t *testing.T) {
+	for _, label := range []string{
+		"Open with default app",
+		"Rename file",
+		"Delete file",
+		"Copy relative path",
+		"Copy absolute path",
+	} {
+		if contextMenuWidth-5 < textWidth(label) {
+			t.Fatalf("context content width = %d, want at least %d for %q", contextMenuWidth-5, textWidth(label), label)
+		}
 	}
 }
 
