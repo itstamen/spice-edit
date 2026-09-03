@@ -400,6 +400,8 @@ type App struct {
 	// sidebarPath* owns the path information panel below the file tree. The
 	// interaction fields are kept here so the drawing and future input routing
 	// share one compact, rune-indexed state bundle.
+	spiceConfigPath          string
+	sidebarPathCollapsed     bool
 	sidebarPathType          sidebarPathType
 	sidebarPathPrefix        []rune
 	sidebarPathPrefixCursor  int
@@ -584,16 +586,17 @@ func New(rootDir string) (*App, error) {
 	}
 
 	a := &App{
-		screen:         scr,
-		copyToSystem:   clipboard.CopyToSystem,
-		readFromSystem: clipboard.ReadSystem,
-		theme:          th,
-		rootDir:        rootDir,
-		rootAnchor:     rootAnchor,
-		tree:           tree,
-		hoveredMenuRow: -1,
-		sidebarShown:   true,
-		sidebarWidth:   defaultSidebarWidth,
+		screen:          scr,
+		copyToSystem:    clipboard.CopyToSystem,
+		readFromSystem:  clipboard.ReadSystem,
+		theme:           th,
+		rootDir:         rootDir,
+		rootAnchor:      rootAnchor,
+		tree:            tree,
+		hoveredMenuRow:  -1,
+		sidebarShown:    true,
+		sidebarWidth:    defaultSidebarWidth,
+		spiceConfigPath: spiceconfig.DefaultPath(),
 	}
 	a.showFrame = a.screen.Show
 	a.initializeImageGraphics()
@@ -655,16 +658,17 @@ func NewSingleFile(filePath string) (*App, error) {
 	}
 
 	a := &App{
-		screen:         scr,
-		copyToSystem:   clipboard.CopyToSystem,
-		readFromSystem: clipboard.ReadSystem,
-		theme:          th,
-		rootDir:        rootDir,
-		rootAnchor:     rootAnchor,
-		tree:           nil,
-		hoveredMenuRow: -1,
-		sidebarShown:   false,
-		sidebarWidth:   defaultSidebarWidth,
+		screen:          scr,
+		copyToSystem:    clipboard.CopyToSystem,
+		readFromSystem:  clipboard.ReadSystem,
+		theme:           th,
+		rootDir:         rootDir,
+		rootAnchor:      rootAnchor,
+		tree:            nil,
+		hoveredMenuRow:  -1,
+		sidebarShown:    false,
+		sidebarWidth:    defaultSidebarWidth,
+		spiceConfigPath: spiceconfig.DefaultPath(),
 	}
 	a.showFrame = a.screen.Show
 	a.initializeImageGraphics()
@@ -721,7 +725,8 @@ func (a *App) loadCustomActions() {
 // config flashes a status message but never blocks startup — the
 // editor falls back to Defaults() and keeps going.
 func (a *App) loadSpiceConfig() {
-	cfg, err := spiceconfig.Load(spiceconfig.DefaultPath())
+	cfg, err := spiceconfig.Load(a.spiceConfigPath)
+	a.sidebarPathCollapsed = cfg.SidebarPathCollapsed
 	if err != nil {
 		a.flash("config: " + err.Error())
 	}
