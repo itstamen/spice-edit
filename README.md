@@ -243,9 +243,11 @@ creating a tab or launching another application.
 The file tree keeps one exact clicked-node selection, shown in bold yellow.
 Right-clicking an unsupported file offers **Open with default app**,
 **Rename file**, **Delete file**, **Copy relative path**, and **Copy absolute
-path**. Those file actions in both the tree context menu and the `Esc Esc`
-main menu act on that exact selected file directly; opening it with the
-default app does not create or switch an editor tab.
+path**. File actions in both the tree context menu and the `Esc Esc` main
+menu act on that exact selected file directly; opening it with the default app
+does not create or switch an editor tab. **Copy relative path** and **Copy
+absolute path** also apply to the exact selected file or folder, including the
+project root.
 
 Press `Esc o` or choose **Open with default app** from the `≡` menu to hand
 the selected tree file, or an active file-backed tab when no tree node is

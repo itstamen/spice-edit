@@ -531,7 +531,8 @@ func TestMenuFileActions_TargetSelectedUnsupportedTreeFile(t *testing.T) {
 
 // TestMenuFileAndFolderEnablement_FollowsSelectedTreeNode makes explicit
 // selection authoritative: files enable file rows, selected folders enable
-// folder rows, and neither the root nor a file can borrow activeFolder.
+// folder rows and path-copy rows, and neither the root nor a file can borrow
+// activeFolder.
 func TestMenuFileAndFolderEnablement_FollowsSelectedTreeNode(t *testing.T) {
 	dir := t.TempDir()
 	folder := filepath.Join(dir, "selected")
@@ -572,9 +573,14 @@ func TestMenuFileAndFolderEnablement_FollowsSelectedTreeNode(t *testing.T) {
 			t.Fatalf("%s should be enabled for selected folder", prefix)
 		}
 	}
-	for _, label := range []string{"Open with default app", "Rename file", "Delete file", "Copy relative path", "Copy absolute path"} {
+	for _, label := range []string{"Open with default app", "Rename file", "Delete file"} {
 		if menuItemByLabel(t, a, label).enabled(a) {
 			t.Fatalf("%q should be disabled for selected folder", label)
+		}
+	}
+	for _, label := range []string{"Copy relative path", "Copy absolute path"} {
+		if !menuItemByLabel(t, a, label).enabled(a) {
+			t.Fatalf("%q should be enabled for selected folder", label)
 		}
 	}
 
@@ -597,9 +603,14 @@ func TestMenuFileAndFolderEnablement_FollowsSelectedTreeNode(t *testing.T) {
 			t.Fatalf("%s should be disabled for selected project root", prefix)
 		}
 	}
-	for _, label := range []string{"Open with default app", "Rename file", "Delete file", "Copy relative path", "Copy absolute path"} {
+	for _, label := range []string{"Open with default app", "Rename file", "Delete file"} {
 		if menuItemByLabel(t, a, label).enabled(a) {
 			t.Fatalf("%q should be disabled for selected project root", label)
+		}
+	}
+	for _, label := range []string{"Copy relative path", "Copy absolute path"} {
+		if !menuItemByLabel(t, a, label).enabled(a) {
+			t.Fatalf("%q should be enabled for selected project root", label)
 		}
 	}
 }

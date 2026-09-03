@@ -229,8 +229,8 @@ func builtinMenuGroups() [][]menuItemDef {
 			{label: "Delete file", action: (*App).menuDelete, enabled: (*App).hasFileActionTarget},
 			{action: (*App).menuRenameFolder, enabled: (*App).hasActiveSubfolder, labelFor: (*App).renameFolderLabel},
 			{action: (*App).menuDeleteFolder, enabled: (*App).hasActiveSubfolder, labelFor: (*App).deleteFolderLabel},
-			{label: "Copy relative path", action: (*App).menuCopyRelativePath, enabled: (*App).hasFileActionTarget},
-			{label: "Copy absolute path", action: (*App).menuCopyAbsolutePath, enabled: (*App).hasFileActionTarget},
+			{label: "Copy relative path", action: (*App).menuCopyRelativePath, enabled: (*App).hasPathActionTarget},
+			{label: "Copy absolute path", action: (*App).menuCopyAbsolutePath, enabled: (*App).hasPathActionTarget},
 		},
 		// Clipboard
 		{
@@ -2940,6 +2940,29 @@ func (a *App) fileActionTarget() (string, bool) {
 // established active-tab-only meaning for callers that need that distinction.
 func (a *App) hasFileActionTarget() bool {
 	_, ok := a.fileActionTarget()
+	return ok
+}
+
+// pathActionTarget resolves the filesystem node used by main-menu path-copy
+// actions. An explicit tree selection is authoritative and may be any node
+// Lstat can see, including directories, roots, and symlinks. When there is no
+// selection (or tree), retain the active file-backed tab fallback.
+func (a *App) pathActionTarget() (string, bool) {
+	if a.tree != nil && a.tree.SelectedPath != "" {
+		path := a.tree.SelectedPath
+		if _, err := os.Lstat(path); err != nil {
+			return "", false
+		}
+		return path, true
+	}
+	return a.fileActionTarget()
+}
+
+// hasPathActionTarget reports whether a main-menu path-copy action has a
+// valid target. It differs from hasFileActionTarget because path copying also
+// accepts explicitly selected directories and symlinks.
+func (a *App) hasPathActionTarget() bool {
+	_, ok := a.pathActionTarget()
 	return ok
 }
 
