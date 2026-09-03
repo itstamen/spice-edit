@@ -66,32 +66,51 @@ func (a *App) drawSidebarPath() {
 	valueStyle := bgStyle.Foreground(a.theme.Text)
 	selectedStyle := bgStyle.Foreground(a.theme.Accent)
 
-	drawAtWidth(a.screen, x, y, w, " ─ Path", titleStyle)
+	drawAtWidth(a.screen, x, y, w, " ─ PATH INFO", titleStyle)
 	drawAtWidth(a.screen, x+1, y+1, w-1, "Path type", labelStyle)
 	relative, absolute := "( ) Relative", "( ) Absolute"
+	relativeStyle, absoluteStyle := valueStyle, valueStyle
 	if a.sidebarPathType == sidebarPathAbsolute {
 		absolute = "(x) Absolute"
+		absoluteStyle = selectedStyle
 	} else {
 		relative = "(x) Relative"
+		relativeStyle = selectedStyle
 	}
-	drawAtWidth(a.screen, x+1, y+2, w-1, relative, selectedStyle)
-	drawAtWidth(a.screen, x+1+termtext.StringWidth(relative)+2, y+2,
-		w-1-termtext.StringWidth(relative)-2, absolute, valueStyle)
-	drawAtWidth(a.screen, x+1, y+3, w-1, "Strip prefix", labelStyle)
 
 	value, prefixValid := a.currentSidebarPath()
 	inputStyle := valueStyle
 	if !prefixValid {
 		inputStyle = inputStyle.Foreground(a.theme.Error)
 	}
-	inputX, inputW := x+1, w-2
-	if inputW > 0 {
-		for cx := inputX; cx < inputX+inputW; cx++ {
-			a.screen.SetContent(cx, y+4, ' ', nil, inputStyle)
+	drawInput := func(inputX, inputY, inputW int) {
+		if inputW <= 0 {
+			return
 		}
-		drawTextInput(a.screen, inputX, y+4, inputW, a.sidebarPathPrefix,
+		for cx := inputX; cx < inputX+inputW; cx++ {
+			a.screen.SetContent(cx, inputY, ' ', nil, inputStyle)
+		}
+		drawTextInput(a.screen, inputX, inputY, inputW, a.sidebarPathPrefix,
 			a.sidebarPathPrefixCursor, &a.sidebarPathPrefixScroll, inputStyle,
 			a.sidebarPathPrefixFocused)
+	}
+
+	radioWidth := termtext.StringWidth(relative) + 2 + termtext.StringWidth(absolute)
+	if radioWidth <= w-1 {
+		drawAtWidth(a.screen, x+1, y+2, w-1, relative, relativeStyle)
+		drawAtWidth(a.screen, x+1+termtext.StringWidth(relative)+2, y+2,
+			w-1-termtext.StringWidth(relative)-2, absolute, absoluteStyle)
+		drawAtWidth(a.screen, x+1, y+3, w-1, "Strip prefix", labelStyle)
+		drawInput(x+1, y+4, w-2)
+	} else {
+		// The narrowest supported sidebar has only 16 inner cells. Keep both
+		// path choices whole by stacking them, then share the prefix label row
+		// with its input so the panel remains exactly eight rows tall.
+		drawAtWidth(a.screen, x+1, y+2, w-1, relative, relativeStyle)
+		drawAtWidth(a.screen, x+1, y+3, w-1, absolute, absoluteStyle)
+		prefixLabel := "Strip prefix"
+		drawAtWidth(a.screen, x, y+4, w, prefixLabel, labelStyle)
+		drawInput(x+termtext.StringWidth(prefixLabel)+1, y+4, w-termtext.StringWidth(prefixLabel)-1)
 	}
 
 	drawAtWidth(a.screen, x+1, y+5, w-1, "Current path", labelStyle)

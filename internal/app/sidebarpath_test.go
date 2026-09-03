@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
+
+	"github.com/cloudmanic/spice-edit/internal/termtext"
 )
 
 // TestCurrentSidebarPath covers the relative/absolute display and prefix
@@ -118,7 +120,7 @@ func TestDrawSidebarPath(t *testing.T) {
 		panel = append(panel, screenLine(a.screen.(tcell.SimulationScreen), y)[:pw])
 	}
 	joined := strings.Join(panel, "\n")
-	for _, want := range []string{"Path type", "(x) Relative  ( ) Absolute", "Strip prefix", "Current path"} {
+	for _, want := range []string{"PATH INFO", "Path type", "(x) Relative  ( ) Absolute", "Strip prefix", "Current path"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("panel is missing %q:\n%s", want, joined)
 		}
@@ -162,5 +164,62 @@ func TestDrawSidebarPath(t *testing.T) {
 	}
 	if len(*copied) != 0 {
 		t.Fatalf("repeated draw copied %v", *copied)
+	}
+}
+
+// TestDrawSidebarPath_CompactRadioLayout keeps both path type choices visible
+// at the minimum supported sidebar width while retaining the eight-row panel.
+func TestDrawSidebarPath_CompactRadioLayout(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.sidebarWidth = minSidebarWidth
+	a.draw()
+	a.screen.Show()
+
+	_, py, pw, _ := a.sidebarPathRect()
+	if pw != minSidebarWidth-1 {
+		t.Fatalf("panel width = %d, want %d", pw, minSidebarWidth-1)
+	}
+	panel := make([]string, 0, sidebarPathPanelHeight)
+	for y := py; y < py+sidebarPathPanelHeight; y++ {
+		panel = append(panel, screenLine(a.screen.(tcell.SimulationScreen), y)[:pw])
+	}
+	joined := strings.Join(panel, "\n")
+	for _, want := range []string{"PATH INFO", "(x) Relative", "( ) Absolute"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("compact panel is missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(panel[2], "Absolute") {
+		t.Fatalf("absolute option should use its own compact row:\n%s", joined)
+	}
+}
+
+// TestDrawSidebarPathTail_CJKCombiningStaysInBounds verifies the tail helper
+// keeps wide and combining clusters inside its two-row drawing rectangle.
+func TestDrawSidebarPathTail_CJKCombiningStaysInBounds(t *testing.T) {
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("screen init: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(8, 2)
+	style := tcell.StyleDefault
+	for y := 0; y < 2; y++ {
+		scr.SetContent(6, y, '!', nil, style)
+	}
+
+	drawSidebarPathTail(scr, 0, 0, 6, "prefix/中文/e\u0301", style)
+	scr.Show()
+	for y := 0; y < 2; y++ {
+		got, _, _ := scr.Get(6, y)
+		if got != "!" {
+			t.Fatalf("tail overwrote boundary at row %d: got %q", y, got)
+		}
+	}
+	for y := 0; y < 2; y++ {
+		line := screenLine(scr, y)[:6]
+		if termtext.StringWidth(line) > 6 {
+			t.Fatalf("tail row %d width = %d, want <= 6", y, termtext.StringWidth(line))
+		}
 	}
 }
