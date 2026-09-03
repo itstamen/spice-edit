@@ -131,6 +131,59 @@ func TestSidebarClick_ExternalRequiresConfirmation(t *testing.T) {
 	}
 }
 
+// TestSidebarClick_CopiesSelectedPath verifies explicit tree clicks publish
+// every selected node, including a repeated row and an unsupported file before
+// its confirmation can open.
+func TestSidebarClick_CopiesSelectedPath(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "docs")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	textPath := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(textPath, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	externalPath := filepath.Join(dir, "manual.pdf")
+	if err := os.WriteFile(externalPath, []byte("%PDF-1.7"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	copied := recordingClipboard(a, nil)
+
+	clickTreePath(t, a, dir)
+	clickTreePath(t, a, folder)
+	clickTreePath(t, a, textPath)
+	clickTreePath(t, a, textPath)
+	clickTreePath(t, a, externalPath)
+
+	want := []string{".", "docs", "notes.txt", "notes.txt", "manual.pdf"}
+	if got := *copied; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("tree copies = %#v, want %#v", got, want)
+	}
+	if !a.confirmOpen || len(a.tabs) != 1 {
+		t.Fatalf("unsupported click confirm/tabs = %v/%d", a.confirmOpen, len(a.tabs))
+	}
+}
+
+// TestTreeContextClick_CopiesSelectedPath makes the right-click selection an
+// explicit copy event too, including a repeated click on the same row.
+func TestTreeContextClick_CopiesSelectedPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	copied := recordingClipboard(a, nil)
+
+	rightClickTreePath(t, a, path)
+	rightClickTreePath(t, a, path)
+	if got := *copied; len(got) != 2 || got[0] != "notes.txt" || got[1] != "notes.txt" {
+		t.Fatalf("context copies = %#v", got)
+	}
+}
+
 // TestSidebarClick_ExternalCancelAndRepeat keeps the current text tab active
 // after No and requires a fresh confirmation on every later tree click.
 func TestSidebarClick_ExternalCancelAndRepeat(t *testing.T) {
@@ -417,7 +470,12 @@ func TestUnsupportedFileContextActions_TargetClickedNode(t *testing.T) {
 	activateContextItem(t, a, "Copy relative path")
 	rightClickTreePath(t, a, paths["absolute"])
 	activateContextItem(t, a, "Copy absolute path")
-	wantCopied := []string{filepath.Base(paths["relative"]), paths["absolute"]}
+	wantCopied := []string{
+		filepath.Base(paths["relative"]),
+		filepath.Base(paths["relative"]),
+		filepath.Base(paths["absolute"]),
+		paths["absolute"],
+	}
 	if len(copied) != len(wantCopied) {
 		t.Fatalf("clipboard writes = %v, want %v", copied, wantCopied)
 	}

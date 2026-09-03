@@ -1506,6 +1506,10 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.handleFinderKey(ev)
 		return
 	}
+	if a.sidebarPathPrefixFocused {
+		a.handleSidebarPathKey(ev)
+		return
+	}
 
 	if ev.Key() == tcell.KeyEsc {
 		// Esc is the editor's only command key. Behavior:
@@ -1727,6 +1731,10 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	// Note: macOS Terminal + tmux often swallows Button3, which is why core
 	// actions also live in the main ≡ menu.
 	if btn&tcell.Button3 != 0 {
+		if a.sidebarPathContains(x, y) {
+			a.sidebarPathPrefixFocused = false
+			return
+		}
 		if a.tryTreeContextClick(x, y) {
 			return
 		}
@@ -1793,6 +1801,10 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 
 	// Initial press dispatch.
 	if leftDown && a.dragMode == "" {
+		if a.handleSidebarPathMouse(x, y) {
+			return
+		}
+		a.sidebarPathPrefixFocused = false
 		sw := a.sidebarW()
 		splitX := a.splitterX()
 		switch {
@@ -1847,7 +1859,8 @@ func (a *App) handleMenuMouse(x, y int, btn tcell.ButtonMask) {
 
 // scrollAt scrolls whichever panel the (x, y) cursor is over.
 func (a *App) scrollAt(x, y, delta int) {
-	if sw := a.sidebarW(); sw > 0 && x < sw {
+	sx, sy, sw, sh := a.sidebarRect()
+	if a.tree != nil && pointInRect(x, y, sx, sy, sw, sh) {
 		a.tree.Scroll(delta)
 		return
 	}
@@ -1894,15 +1907,13 @@ func (a *App) scrollAtH(x, y, delta int) {
 // menu's New File defaults to a sensible target even after the context
 // menu closes.
 func (a *App) tryTreeContextClick(x, y int) bool {
-	sw := a.sidebarW()
-	if sw <= 0 {
+	if a.tree == nil {
 		return false
 	}
-	splitX := a.splitterX()
-	if x >= splitX {
+	sx, sy, sw, sh := a.sidebarRect()
+	if !pointInRect(x, y, sx, sy, sw, sh) {
 		return false
 	}
-	sx, sy, _, _ := a.sidebarRect()
 	n, ok := a.tree.HitTest(x-sx, y-sy)
 	if !ok {
 		return false
@@ -1913,6 +1924,7 @@ func (a *App) tryTreeContextClick(x, y int) bool {
 		a.setActiveFolder(filepath.Dir(n.Path))
 	}
 	a.tree.SelectedPath = n.Path
+	a.copyCurrentSidebarPath(true)
 	a.openTreeContext(n, x, y)
 	return true
 }
@@ -1954,17 +1966,25 @@ func (a *App) tryTabContextClick(x, y int) bool {
 // since the root is always shown and there's no useful "collapsed
 // root" state.
 func (a *App) sidebarClick(x, y int) {
-	sx, sy, _, _ := a.sidebarRect()
+	if a.tree == nil {
+		return
+	}
+	sx, sy, sw, sh := a.sidebarRect()
+	if !pointInRect(x, y, sx, sy, sw, sh) {
+		return
+	}
 	n, ok := a.tree.HitTest(x-sx, y-sy)
 	if !ok {
 		return
 	}
 	if n == a.tree.Root {
 		a.tree.SelectedPath = n.Path
+		a.copyCurrentSidebarPath(true)
 		a.setActiveFolder(a.rootDir)
 		return
 	}
 	a.tree.SelectedPath = n.Path
+	a.copyCurrentSidebarPath(true)
 	if n.IsDir {
 		a.setActiveFolder(n.Path)
 		a.tree.Toggle(n)
@@ -2795,6 +2815,16 @@ func (a *App) routePastedText(text string) {
 		return
 	}
 	if a.menuOpen {
+		return
+	}
+	if a.sidebarPathPrefixFocused {
+		text = normalizeSingleLinePaste(text)
+		if text == "" {
+			return
+		}
+		a.sidebarPathPrefix, a.sidebarPathPrefixCursor = insertPastedRunes(
+			a.sidebarPathPrefix, a.sidebarPathPrefixCursor, text)
+		a.copyCurrentSidebarPath(false)
 		return
 	}
 	a.insertPastedText(text)

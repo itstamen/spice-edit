@@ -8,10 +8,13 @@
 package app
 
 import (
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/cloudmanic/spice-edit/internal/clipboard"
 	"github.com/cloudmanic/spice-edit/internal/termtext"
 )
 
@@ -43,6 +46,154 @@ func (a *App) currentSidebarPath() (string, bool) {
 		return value, false
 	}
 	return strings.TrimPrefix(value, prefix), true
+}
+
+// copyCurrentSidebarPath publishes the tree selection's displayed path after
+// an explicit sidebar event. It intentionally leaves the editor clipboard and
+// status success message alone so path browsing does not disturb text editing.
+func (a *App) copyCurrentSidebarPath(force bool) {
+	value, _ := a.currentSidebarPath()
+	if a.tree == nil || a.tree.SelectedPath == "" || (!force && value == a.sidebarPathLastCopied) {
+		return
+	}
+	copyToSystem := a.copyToSystem
+	if copyToSystem == nil {
+		copyToSystem = clipboard.CopyToSystem
+	}
+	if err := copyToSystem(value); err != nil {
+		a.flash(fmt.Sprintf("Copy failed: %v", err))
+		return
+	}
+	a.sidebarPathLastCopied = value
+}
+
+// sidebarPathInputRect returns the rendered prefix field's clickable cells.
+func (a *App) sidebarPathInputRect() (x, y, w int) {
+	x, y, panelW, panelH := a.sidebarPathRect()
+	if panelW <= 0 || panelH == 0 {
+		return 0, 0, 0
+	}
+	relative, absolute := "( ) Relative", "( ) Absolute"
+	radioWidth := termtext.StringWidth(relative) + 2 + termtext.StringWidth(absolute)
+	if radioWidth <= panelW-1 {
+		return x + 1, y + 4, panelW - 2
+	}
+	prefixLabel := "Strip prefix"
+	inputX := x + termtext.StringWidth(prefixLabel) + 1
+	return inputX, y + 4, panelW - termtext.StringWidth(prefixLabel) - 1
+}
+
+// pointInRect reports whether the screen point lies in the half-open rect.
+func pointInRect(px, py, x, y, w, h int) bool {
+	return w > 0 && h > 0 && px >= x && px < x+w && py >= y && py < y+h
+}
+
+// sidebarPathContains reports whether a point belongs to the path panel.
+func (a *App) sidebarPathContains(x, y int) bool {
+	px, py, pw, ph := a.sidebarPathRect()
+	return pointInRect(x, y, px, py, pw, ph)
+}
+
+// handleSidebarPathMouse consumes left-clicks in the path panel. It maps the
+// prefix field through terminal cells so wide runes retain a valid cursor.
+func (a *App) handleSidebarPathMouse(x, y int) bool {
+	panelX, panelY, panelW, panelH := a.sidebarPathRect()
+	if !pointInRect(x, y, panelX, panelY, panelW, panelH) {
+		return false
+	}
+
+	relative, absolute := "( ) Relative", "( ) Absolute"
+	radioWidth := termtext.StringWidth(relative) + 2 + termtext.StringWidth(absolute)
+	changed := false
+	if radioWidth <= panelW-1 && y == panelY+2 {
+		relativeX := panelX + 1
+		absoluteX := relativeX + termtext.StringWidth(relative) + 2
+		switch {
+		case x >= relativeX && x < relativeX+termtext.StringWidth(relative):
+			changed = a.sidebarPathType != sidebarPathRelative
+			a.sidebarPathType = sidebarPathRelative
+		case x >= absoluteX && x < absoluteX+termtext.StringWidth(absolute):
+			changed = a.sidebarPathType != sidebarPathAbsolute
+			a.sidebarPathType = sidebarPathAbsolute
+		}
+	} else if radioWidth > panelW-1 {
+		switch y {
+		case panelY + 2:
+			changed = a.sidebarPathType != sidebarPathRelative
+			a.sidebarPathType = sidebarPathRelative
+		case panelY + 3:
+			changed = a.sidebarPathType != sidebarPathAbsolute
+			a.sidebarPathType = sidebarPathAbsolute
+		}
+	}
+	if changed {
+		a.sidebarPathPrefixFocused = false
+		a.copyCurrentSidebarPath(false)
+		return true
+	}
+
+	inputX, inputY, inputW := a.sidebarPathInputRect()
+	if pointInRect(x, y, inputX, inputY, inputW, 1) {
+		a.sidebarPathPrefixFocused = true
+		a.sidebarPathPrefixCursor = textInputCursorAt(a.sidebarPathPrefix, a.sidebarPathPrefixScroll, x-inputX)
+		return true
+	}
+
+	a.sidebarPathPrefixFocused = false
+	return true
+}
+
+// handleSidebarPathKey edits the focused prefix field and consumes every key
+// so sidebar input can never leak into the active editor buffer.
+func (a *App) handleSidebarPathKey(ev *tcell.EventKey) {
+	if !a.sidebarPathPrefixFocused {
+		return
+	}
+	if ev.Key() == tcell.KeyEsc || ev.Key() == tcell.KeyEnter || ev.Key() == tcell.KeyTab {
+		a.sidebarPathPrefixFocused = false
+		if ev.Key() == tcell.KeyEsc {
+			a.lastEscape = time.Time{}
+		}
+		return
+	}
+
+	cursor := clampTextInputIndex(a.sidebarPathPrefixCursor, len(a.sidebarPathPrefix))
+	changed := false
+	switch ev.Key() {
+	case tcell.KeyRune:
+		a.sidebarPathPrefix = append(a.sidebarPathPrefix, 0)
+		copy(a.sidebarPathPrefix[cursor+1:], a.sidebarPathPrefix[cursor:])
+		a.sidebarPathPrefix[cursor] = ev.Rune()
+		cursor++
+		changed = true
+	case tcell.KeyLeft:
+		if cursor > 0 {
+			cursor--
+		}
+	case tcell.KeyRight:
+		if cursor < len(a.sidebarPathPrefix) {
+			cursor++
+		}
+	case tcell.KeyHome:
+		cursor = 0
+	case tcell.KeyEnd:
+		cursor = len(a.sidebarPathPrefix)
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		if cursor > 0 {
+			a.sidebarPathPrefix = append(a.sidebarPathPrefix[:cursor-1], a.sidebarPathPrefix[cursor:]...)
+			cursor--
+			changed = true
+		}
+	case tcell.KeyDelete:
+		if cursor < len(a.sidebarPathPrefix) {
+			a.sidebarPathPrefix = append(a.sidebarPathPrefix[:cursor], a.sidebarPathPrefix[cursor+1:]...)
+			changed = true
+		}
+	}
+	a.sidebarPathPrefixCursor = cursor
+	if changed {
+		a.copyCurrentSidebarPath(false)
+	}
 }
 
 // drawSidebarPath paints the compact, unframed path information panel below

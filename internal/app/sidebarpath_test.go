@@ -8,9 +8,12 @@
 package app
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -46,6 +49,194 @@ func TestCurrentSidebarPath(t *testing.T) {
 	got, valid = a.currentSidebarPath()
 	if got != child || valid {
 		t.Fatalf("invalid prefix = %q, %v", got, valid)
+	}
+}
+
+// TestSidebarPathCopy_EventScoped keeps clipboard writes tied to explicit
+// tree and panel actions, never rendering or cursor movement.
+func TestSidebarPathCopy_EventScoped(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.tree.SelectedPath = a.rootDir
+	copied := recordingClipboard(a, nil)
+
+	a.copyCurrentSidebarPath(false)
+	a.copyCurrentSidebarPath(false)
+	a.copyCurrentSidebarPath(true)
+	if got := *copied; len(got) != 2 || got[0] != "." || got[1] != "." {
+		t.Fatalf("copies = %#v, want two forced/event changes", got)
+	}
+	path := filepath.Join(a.rootDir, "opened.txt")
+	if err := os.WriteFile(path, []byte("content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a.openFile(path)
+	if got := len(*copied); got != 2 {
+		t.Fatalf("tab synchronization copied %d times, want 2", got)
+	}
+	if a.clipBuf != "" {
+		t.Fatalf("path copy changed editor clipboard to %q", a.clipBuf)
+	}
+
+	a.tree.SelectedPath = a.rootDir
+	a.copyToSystem = func(string) error { return errors.New("clipboard down") }
+	a.sidebarPathLastCopied = "previous"
+	a.sidebarPathPrefix = []rune(".")
+	a.copyCurrentSidebarPath(false)
+	if a.sidebarPathLastCopied != "previous" {
+		t.Fatalf("failed copy changed last copied to %q", a.sidebarPathLastCopied)
+	}
+	if got := a.statusMsg; got != "Copy failed: clipboard down" {
+		t.Fatalf("failure flash = %q", got)
+	}
+	a.copyToSystem = func(string) error { return nil }
+	a.copyCurrentSidebarPath(false)
+	if a.sidebarPathLastCopied != "" {
+		t.Fatalf("later retry last copied = %q, want empty path", a.sidebarPathLastCopied)
+	}
+}
+
+// TestSidebarPathMouse controls path mode and the rune-indexed prefix field
+// without allowing panel clicks to reach tree context handling.
+func TestSidebarPathMouse_RadioInputAndContextBoundary(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.tree.SelectedPath = a.rootDir
+	copied := recordingClipboard(a, nil)
+	x, y, _, _ := a.sidebarPathRect()
+
+	if !a.handleSidebarPathMouse(x+2, y+2) || a.sidebarPathType != sidebarPathRelative {
+		t.Fatal("relative radio was not handled")
+	}
+	if len(*copied) != 0 {
+		t.Fatalf("unchanged mode copied %#v", *copied)
+	}
+	if !a.handleSidebarPathMouse(x+16, y+2) || a.sidebarPathType != sidebarPathAbsolute {
+		t.Fatal("absolute radio was not handled")
+	}
+	if got := *copied; len(got) != 1 || got[0] != a.rootDir {
+		t.Fatalf("mode copy = %#v, want absolute root", got)
+	}
+
+	a.sidebarPathPrefix = []rune("a中b")
+	if !a.handleSidebarPathMouse(x+3, y+4) || !a.sidebarPathPrefixFocused {
+		t.Fatal("prefix input was not focused")
+	}
+	if a.sidebarPathPrefixCursor != 1 {
+		t.Fatalf("CJK cursor = %d, want start rune 1", a.sidebarPathPrefixCursor)
+	}
+	if !a.handleSidebarPathMouse(x+2, y+6) || a.sidebarPathPrefixFocused {
+		t.Fatal("non-input panel click did not blur")
+	}
+
+	a.handleMouse(tcell.NewEventMouse(x+2, y+6, tcell.Button3, tcell.ModNone))
+	if a.contextOpen || a.menuOpen {
+		t.Fatal("panel right click opened a context or main menu")
+	}
+}
+
+// TestSidebarPathKeyAndPaste captures editing, focus termination, and paste
+// routing while ensuring all focused keys stay out of the active buffer.
+func TestSidebarPathKeyAndPaste(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(path, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, root)
+	a.openFile(path)
+	a.tree.SelectedPath = path
+	a.sidebarPathPrefixFocused = true
+	a.sidebarPathPrefix = []rune("中a")
+	a.sidebarPathPrefixCursor = len(a.sidebarPathPrefix)
+	copied := recordingClipboard(a, nil)
+
+	a.handleSidebarPathKey(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone))
+	if a.sidebarPathPrefixCursor != 1 || len(*copied) != 0 {
+		t.Fatalf("left cursor/copies = %d/%d", a.sidebarPathPrefixCursor, len(*copied))
+	}
+	a.handleSidebarPathKey(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone))
+	if a.sidebarPathPrefixCursor != 2 || len(*copied) != 0 {
+		t.Fatalf("right cursor/copies = %d/%d", a.sidebarPathPrefixCursor, len(*copied))
+	}
+	a.handleSidebarPathKey(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone))
+	a.handleSidebarPathKey(tcell.NewEventKey(tcell.KeyRune, 'x', tcell.ModNone))
+	if got := string(a.sidebarPathPrefix); got != "中xa" {
+		t.Fatalf("rune edit = %q", got)
+	}
+	if len(*copied) != 1 {
+		t.Fatalf("invalid prefix edit copies = %d, want 1", len(*copied))
+	}
+	a.handleSidebarPathKey(tcell.NewEventKey(tcell.KeyRune, 'y', tcell.ModNone))
+	if len(*copied) != 1 {
+		t.Fatalf("unchanged derived value copied %d times, want 1", len(*copied))
+	}
+	*copied = nil
+	a.sidebarPathLastCopied = ""
+	a.sidebarPathPrefix = nil
+	a.sidebarPathPrefixCursor = 0
+	a.handleSidebarPathKey(tcell.NewEventKey(tcell.KeyRune, 'n', tcell.ModNone))
+	a.handleSidebarPathKey(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
+	a.handleSidebarPathKey(tcell.NewEventKey(tcell.KeyRune, 'o', tcell.ModNone))
+	a.handleSidebarPathKey(tcell.NewEventKey(tcell.KeyBackspace, 0, tcell.ModNone))
+	a.handleSidebarPathKey(tcell.NewEventKey(tcell.KeyHome, 0, tcell.ModNone))
+	a.handleSidebarPathKey(tcell.NewEventKey(tcell.KeyDelete, 0, tcell.ModNone))
+	if got := string(a.sidebarPathPrefix); got != "" {
+		t.Fatalf("edit keys = %q, want empty", got)
+	}
+	if len(*copied) != 4 {
+		t.Fatalf("content edits copied %d times, want 4", len(*copied))
+	}
+
+	a.lastEscape = time.Now()
+	a.handleSidebarPathKey(tcell.NewEventKey(tcell.KeyEsc, 0, tcell.ModNone))
+	if a.sidebarPathPrefixFocused || !a.lastEscape.IsZero() {
+		t.Fatal("Esc did not blur and clear leader state")
+	}
+	a.sidebarPathPrefixFocused = true
+	a.handleSidebarPathKey(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	a.sidebarPathPrefixFocused = true
+	a.handleSidebarPathKey(tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone))
+	if a.sidebarPathPrefixFocused || len(*copied) != 4 {
+		t.Fatal("blur keys changed focus or copied")
+	}
+
+	a.sidebarPathPrefixFocused = true
+	a.sidebarPathPrefix = []rune("pre")
+	a.sidebarPathPrefixCursor = len(a.sidebarPathPrefix)
+	pasteEventText(a, "one", "two")
+	if got := string(a.sidebarPathPrefix); got != "preone two" {
+		t.Fatalf("pasted prefix = %q", got)
+	}
+	if got := a.activeTabPtr().Buffer.String(); got != "original" {
+		t.Fatalf("focused path edit changed buffer to %q", got)
+	}
+
+	a.handleKey(tcell.NewEventKey(tcell.KeyRune, 'z', tcell.ModNone))
+	if got := string(a.sidebarPathPrefix); got != "preone twoz" {
+		t.Fatalf("handleKey did not route focused rune: %q", got)
+	}
+	if got := a.activeTabPtr().Buffer.String(); got != "original" {
+		t.Fatalf("handleKey edited buffer to %q", got)
+	}
+}
+
+// TestSidebarPathWheel confines vertical tree scrolling to the tree rectangle.
+func TestSidebarPathWheel_ConfinesTreeScrolling(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 40; i++ {
+		if err := os.WriteFile(filepath.Join(root, "file"+string(rune('a'+i))+".txt"), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := newTestApp(t, root)
+	a.draw()
+	_, py, _, _ := a.sidebarPathRect()
+	a.scrollAt(1, py, wheelLines)
+	if a.tree.ScrollY != 0 {
+		t.Fatalf("panel wheel scrolled tree to %d", a.tree.ScrollY)
+	}
+	a.scrollAt(1, 2, wheelLines)
+	if a.tree.ScrollY != wheelLines {
+		t.Fatalf("tree wheel ScrollY = %d, want %d", a.tree.ScrollY, wheelLines)
 	}
 }
 
