@@ -70,6 +70,57 @@ func newTestApp(t *testing.T, root string) *App {
 	return a
 }
 
+// TestLoadSpiceConfigSidebarPathCollapsed verifies the App copies the
+// persisted path panel preference from its explicitly configured test path.
+func TestLoadSpiceConfigSidebarPathCollapsed(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.spiceConfigPath = filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(a.spiceConfigPath, []byte(`{"sidebar_path_collapsed":true}`), 0o600); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	a.loadSpiceConfig()
+	if !a.sidebarPathCollapsed {
+		t.Fatal("sidebarPathCollapsed = false, want true")
+	}
+}
+
+// TestLoadSpiceConfigMalformedSidebarPathCollapsed verifies malformed config
+// leaves the panel expanded and surfaces the existing config error status.
+func TestLoadSpiceConfigMalformedSidebarPathCollapsed(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.spiceConfigPath = filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(a.spiceConfigPath, []byte(`{"sidebar_path_collapsed":`), 0o600); err != nil {
+		t.Fatalf("seed malformed config: %v", err)
+	}
+
+	a.loadSpiceConfig()
+	if a.sidebarPathCollapsed {
+		t.Fatal("sidebarPathCollapsed = true after malformed config, want false")
+	}
+	if !strings.HasPrefix(a.statusMsg, "config:") {
+		t.Fatalf("status = %q, want config error", a.statusMsg)
+	}
+}
+
+// TestLoadSpiceConfigNullSidebarPathCollapsed verifies a null top-level value
+// is rejected like every other non-object config and leaves the panel expanded.
+func TestLoadSpiceConfigNullSidebarPathCollapsed(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.spiceConfigPath = filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(a.spiceConfigPath, []byte("null"), 0o600); err != nil {
+		t.Fatalf("seed null config: %v", err)
+	}
+
+	a.loadSpiceConfig()
+	if a.sidebarPathCollapsed {
+		t.Fatal("sidebarPathCollapsed = true after null config, want false")
+	}
+	if !strings.HasPrefix(a.statusMsg, "config:") {
+		t.Fatalf("status = %q, want config error", a.statusMsg)
+	}
+}
+
 // TestInitializeCommandPasteStartupFailures verifies native startup errors
 // install deny/no-op hooks and surface the one expected status message.
 func TestInitializeCommandPasteStartupFailures(t *testing.T) {
@@ -159,8 +210,7 @@ func TestSidebarW_ShownVsHidden(t *testing.T) {
 	}
 }
 
-// TestSidebarRect checks the sidebar render rectangle reserves one cell
-// for the splitter on its right edge, and collapses to zero when hidden.
+// TestSidebarRect checks the tree leaves room for the path panel and splitter.
 func TestSidebarRect(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	x, y, w, h := a.sidebarRect()
@@ -170,8 +220,8 @@ func TestSidebarRect(t *testing.T) {
 	if w != defaultSidebarWidth-1 {
 		t.Fatalf("expected w = sidebarWidth-1, got %d", w)
 	}
-	if h != a.height-1 {
-		t.Fatalf("expected h = height-1, got %d", h)
+	if h != a.height-1-sidebarPathPanelHeight {
+		t.Fatalf("expected h = height-1-sidebarPathPanelHeight, got %d", h)
 	}
 
 	a.sidebarShown = false

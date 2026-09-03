@@ -8,8 +8,12 @@
 package spiceconfig
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -20,6 +24,9 @@ func TestDefaults(t *testing.T) {
 	got := Defaults()
 	if got.Icons != IconsAuto {
 		t.Fatalf("Defaults().Icons = %q, want %q", got.Icons, IconsAuto)
+	}
+	if got.SidebarPathCollapsed {
+		t.Fatal("Defaults().SidebarPathCollapsed = true, want false")
 	}
 }
 
@@ -94,6 +101,294 @@ func TestLoadHappyValues(t *testing.T) {
 				t.Fatalf("Load(%s).Icons = %q, want %q", body, cfg.Icons, want)
 			}
 		})
+	}
+}
+
+// TestLoadSidebarPathCollapsed verifies omitted and explicit persisted path
+// panel preferences resolve to their documented boolean values.
+func TestLoadSidebarPathCollapsed(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "omitted", body: `{}`, want: false},
+		{name: "true", body: `{"sidebar_path_collapsed":true}`, want: true},
+		{name: "false", body: `{"sidebar_path_collapsed":false}`, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(tt.body), 0o644); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load(%s): %v", tt.body, err)
+			}
+			if cfg.SidebarPathCollapsed != tt.want {
+				t.Fatalf("Load(%s).SidebarPathCollapsed = %t, want %t", tt.body, cfg.SidebarPathCollapsed, tt.want)
+			}
+		})
+	}
+}
+
+// TestLoadRejectsNonObjectConfig verifies Load shares the updater's contract:
+// a config file must contain a top-level JSON object, never null or a scalar.
+func TestLoadRejectsNonObjectConfig(t *testing.T) {
+	for _, body := range []string{"null", "[]", `"text"`, "true", "42"} {
+		t.Run(body, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+
+			cfg, err := Load(path)
+			if err == nil {
+				t.Fatalf("Load(%s) returned nil error", body)
+			}
+			if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "config must be a JSON object") {
+				t.Fatalf("Load(%s) error = %q, want path and object error", body, err)
+			}
+			if cfg != Defaults() {
+				t.Fatalf("Load(%s) config = %#v, want defaults %#v", body, cfg, Defaults())
+			}
+		})
+	}
+}
+
+// TestLoadPreservesUnknownLargeNumber verifies shape validation does not parse
+// unknown numeric values into float64 and reject otherwise valid future config.
+func TestLoadPreservesUnknownLargeNumber(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"future":1e1000}`), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load(future large number): %v", err)
+	}
+	if cfg != Defaults() {
+		t.Fatalf("Load(future large number) = %#v, want defaults %#v", cfg, Defaults())
+	}
+}
+
+// TestSetSidebarPathCollapsed verifies the narrow update API creates blank
+// configs and changes only its own top-level preference.
+func TestSetSidebarPathCollapsed(t *testing.T) {
+	t.Run("missing file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "nested", "config.json")
+		if err := SetSidebarPathCollapsed(path, true); err != nil {
+			t.Fatalf("SetSidebarPathCollapsed: %v", err)
+		}
+		assertStoredSidebarPathCollapsed(t, path, true)
+		if runtime.GOOS != "windows" {
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat result: %v", err)
+			}
+			if got := info.Mode().Perm(); got != 0o600 {
+				t.Fatalf("new config mode = %o, want 600", got)
+			}
+		}
+	})
+
+	t.Run("empty file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, nil, 0o644); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		if err := SetSidebarPathCollapsed(path, false); err != nil {
+			t.Fatalf("SetSidebarPathCollapsed: %v", err)
+		}
+		assertStoredSidebarPathCollapsed(t, path, false)
+	})
+
+	t.Run("preserves unknown values", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.json")
+		body := `{"icons":"on","theme":"future","unknown":{"a":1}}`
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		if err := SetSidebarPathCollapsed(path, true); err != nil {
+			t.Fatalf("SetSidebarPathCollapsed: %v", err)
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read result: %v", err)
+		}
+		var got map[string]json.RawMessage
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatalf("result must be an object: %v", err)
+		}
+		assertJSONValue(t, got, "icons", `"on"`)
+		assertJSONValue(t, got, "theme", `"future"`)
+		assertJSONValue(t, got, "unknown", `{"a":1}`)
+		assertJSONValue(t, got, "sidebar_path_collapsed", `true`)
+		if runtime.GOOS != "windows" {
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat result: %v", err)
+			}
+			if got := info.Mode().Perm(); got != 0o600 {
+				t.Fatalf("updated config mode = %o, want 600", got)
+			}
+		}
+		entries, err := os.ReadDir(filepath.Dir(path))
+		if err != nil {
+			t.Fatalf("read config directory: %v", err)
+		}
+		if len(entries) != 1 || entries[0].Name() != filepath.Base(path) {
+			t.Fatalf("config update left artifacts: %#v", entries)
+		}
+	})
+
+	t.Run("rename failure preserves existing file and cleans temp", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.json")
+		body := []byte(`{"theme":"future"}`)
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		originalRename := renameFile
+		renameFile = func(string, string) error { return errors.New("rename unavailable") }
+		t.Cleanup(func() { renameFile = originalRename })
+
+		if err := SetSidebarPathCollapsed(path, true); err == nil {
+			t.Fatal("SetSidebarPathCollapsed(rename failure) returned nil error")
+		} else if !strings.Contains(err.Error(), path) {
+			t.Fatalf("rename error = %q, want path context", err)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read preserved config: %v", err)
+		}
+		if string(got) != string(body) {
+			t.Fatalf("existing config changed: got %q, want %q", got, body)
+		}
+		entries, err := os.ReadDir(filepath.Dir(path))
+		if err != nil {
+			t.Fatalf("read config directory: %v", err)
+		}
+		if len(entries) != 1 || entries[0].Name() != filepath.Base(path) {
+			t.Fatalf("rename failure left artifacts: %#v", entries)
+		}
+	})
+
+	t.Run("preserves existing symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		targetPath := filepath.Join(dir, "managed.json")
+		configPath := filepath.Join(dir, "config.json")
+		body := `{"theme":"future","unknown":{"a":1}}`
+		if err := os.WriteFile(targetPath, []byte(body), 0o644); err != nil {
+			t.Fatalf("seed target: %v", err)
+		}
+		if err := os.Symlink(filepath.Base(targetPath), configPath); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+
+		if err := SetSidebarPathCollapsed(configPath, true); err != nil {
+			t.Fatalf("SetSidebarPathCollapsed: %v", err)
+		}
+		info, err := os.Lstat(configPath)
+		if err != nil {
+			t.Fatalf("lstat config symlink: %v", err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("config path mode = %v, want symlink", info.Mode())
+		}
+		data, err := os.ReadFile(targetPath)
+		if err != nil {
+			t.Fatalf("read resolved target: %v", err)
+		}
+		var got map[string]json.RawMessage
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatalf("parse resolved target: %v", err)
+		}
+		assertJSONValue(t, got, "theme", `"future"`)
+		assertJSONValue(t, got, "unknown", `{"a":1}`)
+		assertJSONValue(t, got, "sidebar_path_collapsed", `true`)
+		if runtime.GOOS != "windows" {
+			info, err := os.Stat(targetPath)
+			if err != nil {
+				t.Fatalf("stat resolved target: %v", err)
+			}
+			if got := info.Mode().Perm(); got != 0o600 {
+				t.Fatalf("resolved target mode = %o, want 600", got)
+			}
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read config directory: %v", err)
+		}
+		if len(entries) != 2 || entries[0].Name() != "config.json" || entries[1].Name() != "managed.json" {
+			t.Fatalf("symlink update left artifacts: %#v", entries)
+		}
+	})
+
+	t.Run("malformed file remains unchanged", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.json")
+		body := []byte(`{"icons":`)
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		if err := SetSidebarPathCollapsed(path, true); err == nil {
+			t.Fatal("SetSidebarPathCollapsed(malformed) returned nil error")
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read malformed result: %v", err)
+		}
+		if string(got) != string(body) {
+			t.Fatalf("malformed file changed: got %q, want %q", got, body)
+		}
+	})
+
+	t.Run("empty path", func(t *testing.T) {
+		if err := SetSidebarPathCollapsed("", true); err != nil {
+			t.Fatalf("SetSidebarPathCollapsed(empty): %v", err)
+		}
+	})
+}
+
+// assertStoredSidebarPathCollapsed reads the persisted JSON object and checks
+// the path panel preference without depending on object key ordering.
+func assertStoredSidebarPathCollapsed(t *testing.T, path string, want bool) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("result must be an object: %v", err)
+	}
+	assertJSONValue(t, got, "sidebar_path_collapsed", map[bool]string{true: `true`, false: `false`}[want])
+}
+
+// assertJSONValue compares JSON semantically, preserving the type and value
+// of values that should survive a narrow config update unchanged.
+func assertJSONValue(t *testing.T, object map[string]json.RawMessage, key, want string) {
+	t.Helper()
+	got, ok := object[key]
+	if !ok {
+		t.Fatalf("result missing %q", key)
+	}
+	var gotValue any
+	if err := json.Unmarshal(got, &gotValue); err != nil {
+		t.Fatalf("parse %q: %v", key, err)
+	}
+	var wantValue any
+	if err := json.Unmarshal([]byte(want), &wantValue); err != nil {
+		t.Fatalf("parse expected %q: %v", key, err)
+	}
+	gotJSON, _ := json.Marshal(gotValue)
+	wantJSON, _ := json.Marshal(wantValue)
+	if string(gotJSON) != string(wantJSON) {
+		t.Fatalf("%q = %s, want %s", key, gotJSON, wantJSON)
 	}
 }
 

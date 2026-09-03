@@ -813,26 +813,26 @@ func absolutePathFor(path string) string {
 	return abs
 }
 
-// menuCopyRelativePath copies the resolved file target, rendered relative to
+// menuCopyRelativePath copies the resolved path target, rendered relative to
 // the project root, onto the host system clipboard via OSC 52. Works the same
 // locally and over SSH — the terminal emulator is the thing that actually
 // receives the clipboard write, regardless of where the editor is running.
 func (a *App) menuCopyRelativePath() {
 	a.closeMenu()
-	target, ok := a.fileActionTarget()
+	target, ok := a.pathActionTarget()
 	if !ok {
 		return
 	}
 	a.copyPathToSystemClipboard(a.relativePathFor(target), "relative path")
 }
 
-// menuCopyAbsolutePath copies the resolved file target's absolute path onto
+// menuCopyAbsolutePath copies the resolved path target's absolute path onto
 // the host system clipboard. Useful when pasting the path into a shell on the
 // same remote machine (e.g. another tmux pane running over the same SSH
 // session).
 func (a *App) menuCopyAbsolutePath() {
 	a.closeMenu()
-	target, ok := a.fileActionTarget()
+	target, ok := a.pathActionTarget()
 	if !ok {
 		return
 	}

@@ -680,6 +680,195 @@ func TestFileActionTarget_SelectionAndFallback(t *testing.T) {
 	}
 }
 
+// TestPathActionTarget_SelectionAndFallback keeps path-copy targets broader
+// than file-operation targets. An explicit tree selection accepts every node
+// that Lstat can see, but a stale selection must never fall back to a tab.
+func TestPathActionTarget_SelectionAndFallback(t *testing.T) {
+	root := t.TempDir()
+	activePath := filepath.Join(root, "active.txt")
+	selectedFile := filepath.Join(root, "selected.txt")
+	folder := filepath.Join(root, "folder")
+	directoryLink := filepath.Join(root, "folder-link")
+	brokenLink := filepath.Join(root, "broken-link")
+	for _, path := range []string{activePath, selectedFile} {
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(folder, directoryLink); err != nil {
+		if runtime.GOOS == "windows" || os.IsPermission(err) {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "missing-target"), brokenLink); err != nil {
+		if runtime.GOOS == "windows" || os.IsPermission(err) {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+
+	a := newTestApp(t, root)
+	a.openFile(activePath)
+
+	for _, selected := range []string{selectedFile, folder, a.tree.Root.Path, directoryLink, brokenLink} {
+		a.tree.SelectedPath = selected
+		if got, ok := a.pathActionTarget(); !ok || got != selected {
+			t.Fatalf("selected %q path target = %q, %v; want selected path, true", selected, got, ok)
+		}
+		if !a.hasPathActionTarget() {
+			t.Fatalf("selected %q should enable path actions", selected)
+		}
+	}
+
+	stale := filepath.Join(root, "gone")
+	a.tree.SelectedPath = stale
+	if got, ok := a.pathActionTarget(); ok || got != "" {
+		t.Fatalf("stale selection target = %q, %v; want no target", got, ok)
+	}
+	if a.hasPathActionTarget() {
+		t.Fatal("stale selection should disable path actions")
+	}
+
+	a.tree.SelectedPath = ""
+	if got, ok := a.pathActionTarget(); !ok || got != activePath {
+		t.Fatalf("empty selection fallback = %q, %v; want %q, true", got, ok, activePath)
+	}
+	a.tree = nil
+	if got, ok := a.pathActionTarget(); !ok || got != activePath {
+		t.Fatalf("tree-less fallback = %q, %v; want %q, true", got, ok, activePath)
+	}
+	a.tabs = nil
+	if got, ok := a.pathActionTarget(); ok || got != "" {
+		t.Fatalf("no target = %q, %v; want no target", got, ok)
+	}
+}
+
+// TestPathCopyMenuEnablement_FollowsSelectedTreeNode checks the actual main
+// menu rows: folders and the project root are copyable but remain file-action
+// ineligible, while a selected file enables the complete file-action set.
+func TestPathCopyMenuEnablement_FollowsSelectedTreeNode(t *testing.T) {
+	root := t.TempDir()
+	folder := filepath.Join(root, "selected-folder")
+	file := filepath.Join(root, "selected-file.txt")
+	directoryLink := filepath.Join(root, "folder-link")
+	brokenLink := filepath.Join(root, "broken-link")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(folder, directoryLink); err != nil {
+		if runtime.GOOS == "windows" || os.IsPermission(err) {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "missing-target"), brokenLink); err != nil {
+		if runtime.GOOS == "windows" || os.IsPermission(err) {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	a := newTestApp(t, root)
+	a.openFile(file)
+
+	fileOnlyRows := []string{"Open with default app", "Rename file", "Delete file"}
+	copyRows := []string{"Copy relative path", "Copy absolute path"}
+	allFileRows := append(append([]string{}, fileOnlyRows...), copyRows...)
+	for _, selected := range []string{folder, a.tree.Root.Path} {
+		a.tree.SelectedPath = selected
+		for _, label := range copyRows {
+			if !menuItemByLabel(t, a, label).enabled(a) {
+				t.Fatalf("%q should be enabled for selected %q", label, selected)
+			}
+		}
+		for _, label := range fileOnlyRows {
+			if menuItemByLabel(t, a, label).enabled(a) {
+				t.Fatalf("%q should be disabled for selected %q", label, selected)
+			}
+		}
+	}
+
+	a.tree.SelectedPath = file
+	for _, label := range allFileRows {
+		if !menuItemByLabel(t, a, label).enabled(a) {
+			t.Fatalf("%q should be enabled for selected file", label)
+		}
+	}
+	for _, selected := range []string{directoryLink, brokenLink} {
+		a.tree.SelectedPath = selected
+		for _, label := range allFileRows {
+			if !menuItemByLabel(t, a, label).enabled(a) {
+				t.Fatalf("%q should be enabled for selected symlink %q", label, selected)
+			}
+		}
+	}
+
+	a.tree.SelectedPath = filepath.Join(root, "stale")
+	for _, label := range allFileRows {
+		if menuItemByLabel(t, a, label).enabled(a) {
+			t.Fatalf("%q should be disabled for stale selection", label)
+		}
+	}
+
+	a.tree.SelectedPath = ""
+	for _, label := range allFileRows {
+		if !menuItemByLabel(t, a, label).enabled(a) {
+			t.Fatalf("%q should use the active tab when selection is empty", label)
+		}
+	}
+	a.tree = nil
+	for _, label := range allFileRows {
+		if !menuItemByLabel(t, a, label).enabled(a) {
+			t.Fatalf("%q should use the active tab without a tree", label)
+		}
+	}
+	a.tabs = nil
+	for _, label := range allFileRows {
+		if menuItemByLabel(t, a, label).enabled(a) {
+			t.Fatalf("%q should be disabled without a target", label)
+		}
+	}
+}
+
+// TestMenuCopyPath_SelectedFolderAndRoot copies the explicit tree selection,
+// including the project root, instead of borrowing an unrelated active tab.
+func TestMenuCopyPath_SelectedFolderAndRoot(t *testing.T) {
+	root := t.TempDir()
+	folder := filepath.Join(root, "selected-folder")
+	activePath := filepath.Join(root, "unrelated.txt")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(activePath, []byte("unrelated"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, root)
+	a.openFile(activePath)
+	var copied []string
+	a.copyToSystem = func(path string) error {
+		copied = append(copied, path)
+		return nil
+	}
+
+	a.tree.SelectedPath = folder
+	a.menuCopyRelativePath()
+	a.menuCopyAbsolutePath()
+	a.tree.SelectedPath = a.tree.Root.Path
+	a.menuCopyRelativePath()
+	a.menuCopyAbsolutePath()
+
+	want := []string{filepath.Base(folder), folder, ".", root}
+	if strings.Join(copied, "|") != strings.Join(want, "|") {
+		t.Fatalf("clipboard writes = %v, want %v", copied, want)
+	}
+}
+
 // TestFolderActions_RefuseAbsoluteTreeRootWithRelativeRootDir covers the
 // production `spiceedit .` shape: App.rootDir remains ".", but the tree and
 // active folder use absolute paths. The root must still be non-actionable.

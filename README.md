@@ -191,6 +191,15 @@ Then:
   right_click_passthrough_modifier = "ctrl"
   ```
 - Drag the splitter between the sidebar and editor to resize.
+- The compact **PATH INFO** panel below the tree follows the exact node clicked
+  with either mouse button. **Relative** (the default) copies a path rooted at
+  the opened project directory; **Absolute** copies the full filesystem path.
+  **Strip prefix** removes a matching literal prefix from **Current path**. An
+  invalid prefix turns red and leaves the unstripped path intact. Selecting a
+  node or changing either control automatically copies the full current value
+  to the system clipboard, even when the sidebar shortens its on-screen display.
+  Its `▲`/`▼` header control collapses or expands the panel. It starts expanded,
+  and SpiceEdit remembers the choice in `config.json`.
 - Click and drag in the editor to select; drag past the top or bottom
   edge to auto-scroll the selection.
 
@@ -243,9 +252,11 @@ creating a tab or launching another application.
 The file tree keeps one exact clicked-node selection, shown in bold yellow.
 Right-clicking an unsupported file offers **Open with default app**,
 **Rename file**, **Delete file**, **Copy relative path**, and **Copy absolute
-path**. Those file actions in both the tree context menu and the `Esc Esc`
-main menu act on that exact selected file directly; opening it with the
-default app does not create or switch an editor tab.
+path**. File actions in both the tree context menu and the `Esc Esc` main
+menu act on that exact selected file directly; opening it with the default app
+does not create or switch an editor tab. **Copy relative path** and **Copy
+absolute path** also apply to the exact selected file or folder, including the
+project root.
 
 Press `Esc o` or choose **Open with default app** from the `≡` menu to hand
 the selected tree file, or an active file-backed tab when no tree node is

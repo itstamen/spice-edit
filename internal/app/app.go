@@ -229,8 +229,8 @@ func builtinMenuGroups() [][]menuItemDef {
 			{label: "Delete file", action: (*App).menuDelete, enabled: (*App).hasFileActionTarget},
 			{action: (*App).menuRenameFolder, enabled: (*App).hasActiveSubfolder, labelFor: (*App).renameFolderLabel},
 			{action: (*App).menuDeleteFolder, enabled: (*App).hasActiveSubfolder, labelFor: (*App).deleteFolderLabel},
-			{label: "Copy relative path", action: (*App).menuCopyRelativePath, enabled: (*App).hasFileActionTarget},
-			{label: "Copy absolute path", action: (*App).menuCopyAbsolutePath, enabled: (*App).hasFileActionTarget},
+			{label: "Copy relative path", action: (*App).menuCopyRelativePath, enabled: (*App).hasPathActionTarget},
+			{label: "Copy absolute path", action: (*App).menuCopyAbsolutePath, enabled: (*App).hasPathActionTarget},
 		},
 		// Clipboard
 		{
@@ -397,6 +397,19 @@ type App struct {
 	// drag the splitter to change it within [minSidebarWidth, width-minEditorAfterDrag].
 	sidebarWidth int
 
+	// sidebarPath* owns the path information panel below the file tree. The
+	// interaction fields are kept here so the drawing and future input routing
+	// share one compact, rune-indexed state bundle.
+	spiceConfigPath          string
+	sidebarPathCollapsed     bool
+	sidebarPathType          sidebarPathType
+	sidebarPathPrefix        []rune
+	sidebarPathPrefixCursor  int
+	sidebarPathPrefixScroll  int
+	sidebarPathPrefixFocused bool
+	sidebarPathLastCopied    string
+	sidebarPathHasCopied     bool
+
 	clipBuf            string
 	copyToSystem       func(string) error
 	readFromSystem     func() (string, error)
@@ -409,7 +422,7 @@ type App struct {
 	statusUntil        time.Time
 	openPath           pathOpener
 	revealPath         pathRevealer
-	dragMode           string // "editor" while a drag-select is active.
+	dragMode           string // "editor", "sidebar", "tree", or "path" while a mouse press is held.
 	lastClick          clickRecord
 	lastTabRects       []tabRect
 
@@ -573,16 +586,17 @@ func New(rootDir string) (*App, error) {
 	}
 
 	a := &App{
-		screen:         scr,
-		copyToSystem:   clipboard.CopyToSystem,
-		readFromSystem: clipboard.ReadSystem,
-		theme:          th,
-		rootDir:        rootDir,
-		rootAnchor:     rootAnchor,
-		tree:           tree,
-		hoveredMenuRow: -1,
-		sidebarShown:   true,
-		sidebarWidth:   defaultSidebarWidth,
+		screen:          scr,
+		copyToSystem:    clipboard.CopyToSystem,
+		readFromSystem:  clipboard.ReadSystem,
+		theme:           th,
+		rootDir:         rootDir,
+		rootAnchor:      rootAnchor,
+		tree:            tree,
+		hoveredMenuRow:  -1,
+		sidebarShown:    true,
+		sidebarWidth:    defaultSidebarWidth,
+		spiceConfigPath: spiceconfig.DefaultPath(),
 	}
 	a.showFrame = a.screen.Show
 	a.initializeImageGraphics()
@@ -644,16 +658,17 @@ func NewSingleFile(filePath string) (*App, error) {
 	}
 
 	a := &App{
-		screen:         scr,
-		copyToSystem:   clipboard.CopyToSystem,
-		readFromSystem: clipboard.ReadSystem,
-		theme:          th,
-		rootDir:        rootDir,
-		rootAnchor:     rootAnchor,
-		tree:           nil,
-		hoveredMenuRow: -1,
-		sidebarShown:   false,
-		sidebarWidth:   defaultSidebarWidth,
+		screen:          scr,
+		copyToSystem:    clipboard.CopyToSystem,
+		readFromSystem:  clipboard.ReadSystem,
+		theme:           th,
+		rootDir:         rootDir,
+		rootAnchor:      rootAnchor,
+		tree:            nil,
+		hoveredMenuRow:  -1,
+		sidebarShown:    false,
+		sidebarWidth:    defaultSidebarWidth,
+		spiceConfigPath: spiceconfig.DefaultPath(),
 	}
 	a.showFrame = a.screen.Show
 	a.initializeImageGraphics()
@@ -710,7 +725,8 @@ func (a *App) loadCustomActions() {
 // config flashes a status message but never blocks startup — the
 // editor falls back to Defaults() and keeps going.
 func (a *App) loadSpiceConfig() {
-	cfg, err := spiceconfig.Load(spiceconfig.DefaultPath())
+	cfg, err := spiceconfig.Load(a.spiceConfigPath)
+	a.sidebarPathCollapsed = cfg.SidebarPathCollapsed
 	if err != nil {
 		a.flash("config: " + err.Error())
 	}
@@ -1343,15 +1359,43 @@ func (a *App) sidebarW() int {
 	return a.sidebarWidth
 }
 
-// sidebarRect returns the file tree's render rectangle (one column
-// narrower than the sidebar block — the rightmost column belongs to the
-// resize splitter). Zero width when the sidebar is hidden.
+// sidebarPathHeight returns the currently reserved height of the PATH INFO
+// panel. It stays unavailable in tiny layouts even when collapsed so a resize
+// cannot make a held header press become a tree press.
+func (a *App) sidebarPathHeight() int {
+	if !a.sidebarShown || a.tree == nil || a.sidebarWidth <= 1 ||
+		a.height-1 < sidebarPathExpandedHeight {
+		return 0
+	}
+	if a.sidebarPathCollapsed {
+		return sidebarPathCollapsedHeight
+	}
+	return sidebarPathExpandedHeight
+}
+
+// sidebarRect returns the file tree's render rectangle above the path panel.
+// It is one column narrower than the sidebar block because the rightmost
+// column belongs to the resize splitter. Zero width when the sidebar is hidden.
 func (a *App) sidebarRect() (x, y, w, h int) {
 	sw := a.sidebarW()
 	if sw <= 0 {
 		return 0, 0, 0, 0
 	}
-	return 0, 0, sw - 1, a.height - 1
+	h = a.height - 1 - a.sidebarPathHeight()
+	if h < 0 {
+		h = 0
+	}
+	return 0, 0, sw - 1, h
+}
+
+// sidebarPathRect returns the path panel below the tree. It only exists when
+// a visible tree has enough rows to show the complete expanded panel.
+func (a *App) sidebarPathRect() (x, y, w, h int) {
+	h = a.sidebarPathHeight()
+	if h == 0 {
+		return 0, 0, 0, 0
+	}
+	return 0, a.height - 1 - h, a.sidebarWidth - 1, h
 }
 
 // splitterX returns the x coordinate of the resize splitter column, or -1
@@ -1481,6 +1525,10 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	}
 	if a.finderOpen {
 		a.handleFinderKey(ev)
+		return
+	}
+	if a.sidebarPathPrefixFocused {
+		a.handleSidebarPathKey(ev)
 		return
 	}
 
@@ -1699,11 +1747,24 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		return
 	}
 
+	leftDown := btn&tcell.Button1 != 0
+	// A tcell backend may combine Button1 and wheel bits in one event. Consume
+	// the complete PATH INFO gesture before wheel routing can reach the newly
+	// exposed tree or editor after a header toggle changes the panel geometry.
+	if leftDown && a.dragMode == "path" {
+		return
+	}
+
 	// Right-click handling. File-tree rows and rendered tabs get focused
 	// context menus; everywhere else falls through to the main action menu.
 	// Note: macOS Terminal + tmux often swallows Button3, which is why core
 	// actions also live in the main ≡ menu.
 	if btn&tcell.Button3 != 0 {
+		if a.sidebarPathContains(x, y) {
+			a.sidebarPathPrefixFocused = false
+			return
+		}
+		a.sidebarPathPrefixFocused = false
 		if a.tryTreeContextClick(x, y) {
 			return
 		}
@@ -1751,8 +1812,6 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		return
 	}
 
-	leftDown := btn&tcell.Button1 != 0
-
 	// Drag continuation: while we're mid-drag in the editor, every event
 	// with the button held extends the selection — even if the cursor has
 	// wandered out of the editor pane.
@@ -1768,14 +1827,28 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		return
 	}
 
+	// Tree presses act once on button-down. Terminals report motion with
+	// Button1 still set, so consume the rest of the held gesture rather than
+	// repeatedly toggling or opening whichever row the pointer crosses.
+	if leftDown && a.dragMode == "tree" {
+		return
+	}
+
 	// Initial press dispatch.
 	if leftDown && a.dragMode == "" {
+		if a.handleSidebarPathMouse(x, y) {
+			a.dragMode = "path"
+			return
+		}
+		a.sidebarPathPrefixFocused = false
 		sw := a.sidebarW()
 		splitX := a.splitterX()
+		treeX, treeY, treeW, treeH := a.sidebarRect()
 		switch {
 		case splitX >= 0 && x == splitX:
 			a.dragMode = "sidebar"
-		case sw > 0 && x < splitX:
+		case sw > 0 && pointInRect(x, y, treeX, treeY, treeW, treeH):
+			a.dragMode = "tree"
 			a.sidebarClick(x, y)
 		case y == 0:
 			a.tabBarClick(x, y)
@@ -1824,8 +1897,15 @@ func (a *App) handleMenuMouse(x, y int, btn tcell.ButtonMask) {
 
 // scrollAt scrolls whichever panel the (x, y) cursor is over.
 func (a *App) scrollAt(x, y, delta int) {
-	if sw := a.sidebarW(); sw > 0 && x < sw {
+	if a.sidebarPathContains(x, y) {
+		return
+	}
+	sx, sy, sw, sh := a.sidebarRect()
+	if a.tree != nil && pointInRect(x, y, sx, sy, sw, sh) {
 		a.tree.Scroll(delta)
+		return
+	}
+	if sw := a.sidebarW(); sw > 0 && x < sw {
 		return
 	}
 	if y > 0 && y < a.height-1 {
@@ -1871,25 +1951,25 @@ func (a *App) scrollAtH(x, y, delta int) {
 // menu's New File defaults to a sensible target even after the context
 // menu closes.
 func (a *App) tryTreeContextClick(x, y int) bool {
-	sw := a.sidebarW()
-	if sw <= 0 {
+	if a.tree == nil {
 		return false
 	}
-	splitX := a.splitterX()
-	if x >= splitX {
+	sx, sy, sw, sh := a.sidebarRect()
+	if !pointInRect(x, y, sx, sy, sw, sh) {
 		return false
 	}
-	sx, sy, _, _ := a.sidebarRect()
 	n, ok := a.tree.HitTest(x-sx, y-sy)
 	if !ok {
 		return false
 	}
+	a.sidebarPathPrefixFocused = false
 	if n.IsDir {
 		a.setActiveFolder(n.Path)
 	} else {
 		a.setActiveFolder(filepath.Dir(n.Path))
 	}
 	a.tree.SelectedPath = n.Path
+	a.copyCurrentSidebarPath(true)
 	a.openTreeContext(n, x, y)
 	return true
 }
@@ -1931,17 +2011,25 @@ func (a *App) tryTabContextClick(x, y int) bool {
 // since the root is always shown and there's no useful "collapsed
 // root" state.
 func (a *App) sidebarClick(x, y int) {
-	sx, sy, _, _ := a.sidebarRect()
+	if a.tree == nil {
+		return
+	}
+	sx, sy, sw, sh := a.sidebarRect()
+	if !pointInRect(x, y, sx, sy, sw, sh) {
+		return
+	}
 	n, ok := a.tree.HitTest(x-sx, y-sy)
 	if !ok {
 		return
 	}
 	if n == a.tree.Root {
 		a.tree.SelectedPath = n.Path
+		a.copyCurrentSidebarPath(true)
 		a.setActiveFolder(a.rootDir)
 		return
 	}
 	a.tree.SelectedPath = n.Path
+	a.copyCurrentSidebarPath(true)
 	if n.IsDir {
 		a.setActiveFolder(n.Path)
 		a.tree.Toggle(n)
@@ -2715,6 +2803,14 @@ func normalizeSingleLinePaste(text string) string {
 	return strings.ReplaceAll(normalizePastedText(text), "\n", " ")
 }
 
+// normalizeSidebarPathPrefixPaste removes terminal line endings while
+// preserving meaningful spaces in a path prefix and flattening internal lines.
+func normalizeSidebarPathPrefixPaste(text string) string {
+	text = normalizePastedText(text)
+	text = strings.TrimRight(text, "\n")
+	return strings.ReplaceAll(text, "\n", " ")
+}
+
 // insertPastedRunes inserts text at a rune cursor and returns the updated
 // value and cursor. It is shared by every single-line text input modal.
 func insertPastedRunes(value []rune, cursor int, text string) ([]rune, int) {
@@ -2772,6 +2868,16 @@ func (a *App) routePastedText(text string) {
 		return
 	}
 	if a.menuOpen {
+		return
+	}
+	if a.sidebarPathPrefixFocused {
+		text = normalizeSidebarPathPrefixPaste(text)
+		if text == "" {
+			return
+		}
+		a.sidebarPathPrefix, a.sidebarPathPrefixCursor = insertPastedRunes(
+			a.sidebarPathPrefix, a.sidebarPathPrefixCursor, text)
+		a.copyCurrentSidebarPath(false)
 		return
 	}
 	a.insertPastedText(text)
@@ -2940,6 +3046,29 @@ func (a *App) fileActionTarget() (string, bool) {
 // established active-tab-only meaning for callers that need that distinction.
 func (a *App) hasFileActionTarget() bool {
 	_, ok := a.fileActionTarget()
+	return ok
+}
+
+// pathActionTarget resolves the filesystem node used by main-menu path-copy
+// actions. An explicit tree selection is authoritative and may be any node
+// Lstat can see, including directories, roots, and symlinks. When there is no
+// selection (or tree), retain the active file-backed tab fallback.
+func (a *App) pathActionTarget() (string, bool) {
+	if a.tree != nil && a.tree.SelectedPath != "" {
+		path := a.tree.SelectedPath
+		if _, err := os.Lstat(path); err != nil {
+			return "", false
+		}
+		return path, true
+	}
+	return a.fileActionTarget()
+}
+
+// hasPathActionTarget reports whether a main-menu path-copy action has a
+// valid target. It differs from hasFileActionTarget because path copying also
+// accepts explicitly selected directories and symlinks.
+func (a *App) hasPathActionTarget() bool {
+	_, ok := a.pathActionTarget()
 	return ok
 }
 
@@ -3370,7 +3499,7 @@ func (a *App) draw() {
 		return
 	}
 
-	if a.sidebarShown {
+	if a.sidebarShown && a.tree != nil {
 		sx, sy, sw, sh := a.sidebarRect()
 		a.tree.Render(a.screen, a.theme, sx, sy, sw, sh)
 		a.drawSplitter()
@@ -3391,6 +3520,13 @@ func (a *App) draw() {
 		}
 	} else {
 		a.drawEmptyEditor()
+	}
+
+	// Editor rendering owns the normal caret, so repaint PATH INFO afterward
+	// to restore its input caret when that field has focus. Find and modal
+	// overlays still draw later and retain final focus precedence.
+	if a.sidebarShown && a.tree != nil {
+		a.drawSidebarPath()
 	}
 
 	if a.findOpen {

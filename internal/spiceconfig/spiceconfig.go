@@ -11,7 +11,7 @@
 // is editor preferences. Keeping them apart means a malformed actions
 // file can't break editor settings and vice-versa.
 //
-// Schema today is intentionally tiny — one key — but the loader is
+// Schema today is intentionally tiny, but the loader is
 // already wrapped in a struct so we can grow new top-level fields
 // without breaking older configs:
 //
@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,25 +45,31 @@ const (
 	IconsOff  IconsMode = "off"
 )
 
+// renameFile is replaced by focused tests to prove a failed final replacement
+// leaves the live config intact.
+var renameFile = os.Rename
+
 // Config is the resolved, validated form of config.json. Callers get a
 // fully-populated Config back from Load — defaults are filled in for
 // any field the file omitted, so consumers never need to nil-check.
 type Config struct {
-	Icons IconsMode
+	Icons                IconsMode
+	SidebarPathCollapsed bool
 }
 
 // Defaults returns a Config populated with the values used when no
 // config file is present (or every field in it is blank). Centralised
 // so tests and the loader can't drift from each other.
 func Defaults() Config {
-	return Config{Icons: IconsAuto}
+	return Config{Icons: IconsAuto, SidebarPathCollapsed: false}
 }
 
 // fileFormat mirrors the on-disk JSON shape. We decode into this and
 // then promote into Config so the public type doesn't have to carry
 // JSON tags or pointer fields just for "field was absent" detection.
 type fileFormat struct {
-	Icons string `json:"icons,omitempty"`
+	Icons                string `json:"icons,omitempty"`
+	SidebarPathCollapsed *bool  `json:"sidebar_path_collapsed,omitempty"`
 }
 
 // DefaultPath returns the canonical config-file location:
@@ -105,8 +112,16 @@ func Load(path string) (Config, error) {
 		}
 		return cfg, fmt.Errorf("read %s: %w", path, err)
 	}
-	if len(data) == 0 {
+	if len(strings.TrimSpace(string(data))) == 0 {
 		return cfg, nil
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return cfg, fmt.Errorf("parse %s: config must be a JSON object: %w", path, err)
+	}
+	if raw == nil {
+		return cfg, fmt.Errorf("parse %s: config must be a JSON object", path)
 	}
 
 	var ff fileFormat
@@ -129,5 +144,92 @@ func Load(path string) (Config, error) {
 			path, IconsAuto, IconsOn, IconsOff, ff.Icons,
 		)
 	}
+	if ff.SidebarPathCollapsed != nil {
+		cfg.SidebarPathCollapsed = *ff.SidebarPathCollapsed
+	}
 	return cfg, nil
+}
+
+// SetSidebarPathCollapsed persists the path information panel preference
+// without changing unrecognised top-level settings in config.json.
+func SetSidebarPathCollapsed(path string, collapsed bool) error {
+	if path == "" {
+		return nil
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	writePath := path
+	info, err := os.Lstat(path)
+	if err == nil && info.Mode()&os.ModeSymlink != 0 {
+		writePath, err = filepath.EvalSymlinks(path)
+		if err != nil {
+			return fmt.Errorf("resolve %s: %w", path, err)
+		}
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("lstat %s: %w", path, err)
+	}
+
+	values := make(map[string]json.RawMessage)
+	if len(strings.TrimSpace(string(data))) != 0 {
+		if err := json.Unmarshal(data, &values); err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
+		if values == nil {
+			return fmt.Errorf("parse %s: config must be a JSON object", path)
+		}
+	}
+
+	encoded, err := json.Marshal(collapsed)
+	if err != nil {
+		return fmt.Errorf("marshal %s: %w", path, err)
+	}
+	values["sidebar_path_collapsed"] = encoded
+
+	data, err = json.MarshalIndent(values, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal %s: %w", path, err)
+	}
+	data = append(data, '\n')
+
+	dir := filepath.Dir(writePath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", path, err)
+	}
+	temp, err := os.CreateTemp(dir, "."+filepath.Base(writePath)+"-*")
+	if err != nil {
+		return fmt.Errorf("create temp %s: %w", path, err)
+	}
+	tempPath := temp.Name()
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if err := temp.Chmod(0o600); err != nil {
+		_ = temp.Close()
+		return fmt.Errorf("chmod %s: %w", path, err)
+	}
+	if written, err := temp.Write(data); err != nil {
+		_ = temp.Close()
+		return fmt.Errorf("write %s: %w", path, err)
+	} else if written != len(data) {
+		_ = temp.Close()
+		return fmt.Errorf("write %s: %w", path, io.ErrShortWrite)
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return fmt.Errorf("sync %s: %w", path, err)
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", path, err)
+	}
+	if err := renameFile(tempPath, writePath); err != nil {
+		return fmt.Errorf("rename %s: %w", path, err)
+	}
+	removeTemp = false
+	return nil
 }
