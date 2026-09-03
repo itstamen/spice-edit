@@ -397,6 +397,16 @@ type App struct {
 	// drag the splitter to change it within [minSidebarWidth, width-minEditorAfterDrag].
 	sidebarWidth int
 
+	// sidebarPath* owns the path information panel below the file tree. The
+	// interaction fields are kept here so the drawing and future input routing
+	// share one compact, rune-indexed state bundle.
+	sidebarPathType          sidebarPathType
+	sidebarPathPrefix        []rune
+	sidebarPathPrefixCursor  int
+	sidebarPathPrefixScroll  int
+	sidebarPathPrefixFocused bool
+	sidebarPathLastCopied    string
+
 	clipBuf            string
 	copyToSystem       func(string) error
 	readFromSystem     func() (string, error)
@@ -1343,15 +1353,28 @@ func (a *App) sidebarW() int {
 	return a.sidebarWidth
 }
 
-// sidebarRect returns the file tree's render rectangle (one column
-// narrower than the sidebar block — the rightmost column belongs to the
-// resize splitter). Zero width when the sidebar is hidden.
+// sidebarRect returns the file tree's render rectangle above the path panel.
+// It is one column narrower than the sidebar block because the rightmost
+// column belongs to the resize splitter. Zero width when the sidebar is hidden.
 func (a *App) sidebarRect() (x, y, w, h int) {
 	sw := a.sidebarW()
 	if sw <= 0 {
 		return 0, 0, 0, 0
 	}
-	return 0, 0, sw - 1, a.height - 1
+	h = a.height - 1 - sidebarPathPanelHeight
+	if h < 0 {
+		h = 0
+	}
+	return 0, 0, sw - 1, h
+}
+
+// sidebarPathRect returns the path panel below the tree. It only exists when
+// a visible tree has enough rows to show the complete compact panel.
+func (a *App) sidebarPathRect() (x, y, w, h int) {
+	if !a.sidebarShown || a.tree == nil || a.height-1 < sidebarPathPanelHeight {
+		return 0, 0, 0, 0
+	}
+	return 0, a.height - 1 - sidebarPathPanelHeight, a.sidebarWidth - 1, sidebarPathPanelHeight
 }
 
 // splitterX returns the x coordinate of the resize splitter column, or -1
@@ -3393,9 +3416,10 @@ func (a *App) draw() {
 		return
 	}
 
-	if a.sidebarShown {
+	if a.sidebarShown && a.tree != nil {
 		sx, sy, sw, sh := a.sidebarRect()
 		a.tree.Render(a.screen, a.theme, sx, sy, sw, sh)
+		a.drawSidebarPath()
 		a.drawSplitter()
 	}
 

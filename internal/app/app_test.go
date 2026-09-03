@@ -159,8 +159,7 @@ func TestSidebarW_ShownVsHidden(t *testing.T) {
 	}
 }
 
-// TestSidebarRect checks the sidebar render rectangle reserves one cell
-// for the splitter on its right edge, and collapses to zero when hidden.
+// TestSidebarRect checks the tree leaves room for the path panel and splitter.
 func TestSidebarRect(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	x, y, w, h := a.sidebarRect()
@@ -170,8 +169,8 @@ func TestSidebarRect(t *testing.T) {
 	if w != defaultSidebarWidth-1 {
 		t.Fatalf("expected w = sidebarWidth-1, got %d", w)
 	}
-	if h != a.height-1 {
-		t.Fatalf("expected h = height-1, got %d", h)
+	if h != a.height-1-sidebarPathPanelHeight {
+		t.Fatalf("expected h = height-1-sidebarPathPanelHeight, got %d", h)
 	}
 
 	a.sidebarShown = false
