@@ -525,6 +525,238 @@ func TestSidebarPathRect(t *testing.T) {
 	}
 }
 
+// TestSidebarPathCollapseGeometry keeps the tree and path panel derived from
+// one dynamic height so collapsing returns exactly seven rows to the tree.
+func TestSidebarPathCollapseGeometry(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	_, _, _, expandedTreeH := a.sidebarRect()
+	_, expandedY, expandedW, expandedH := a.sidebarPathRect()
+	if expandedH != sidebarPathExpandedHeight {
+		t.Fatalf("expanded panel height = %d, want %d", expandedH, sidebarPathExpandedHeight)
+	}
+
+	a.sidebarPathCollapsed = true
+	_, _, _, collapsedTreeH := a.sidebarRect()
+	_, collapsedY, collapsedW, collapsedH := a.sidebarPathRect()
+	if collapsedH != sidebarPathCollapsedHeight {
+		t.Fatalf("collapsed panel height = %d, want %d", collapsedH, sidebarPathCollapsedHeight)
+	}
+	if collapsedTreeH != expandedTreeH+sidebarPathExpandedHeight-sidebarPathCollapsedHeight {
+		t.Fatalf("collapsed tree height = %d, expanded = %d", collapsedTreeH, expandedTreeH)
+	}
+	if collapsedY != expandedY+sidebarPathExpandedHeight-sidebarPathCollapsedHeight || collapsedW != expandedW {
+		t.Fatalf("collapsed panel = (%d,%d), expanded = (%d,%d)", collapsedY, collapsedW, expandedY, expandedW)
+	}
+
+	inputX, inputY, inputW := a.sidebarPathInputRect()
+	if inputX != 0 || inputY != 0 || inputW != 0 {
+		t.Fatalf("collapsed input rect = (%d,%d,%d), want zero", inputX, inputY, inputW)
+	}
+}
+
+// TestSidebarPathCollapseDrawing verifies each header advertises its action
+// and a collapsed panel renders no interactive body rows.
+func TestSidebarPathCollapseDrawing(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.draw()
+	a.screen.Show()
+	_, expandedY, expandedW, _ := a.sidebarPathRect()
+	expanded := screenLine(a.screen.(tcell.SimulationScreen), expandedY)[:expandedW]
+	if !strings.Contains(expanded, "PATH INFO ▲") {
+		t.Fatalf("expanded header = %q, want PATH INFO ▲", expanded)
+	}
+
+	a.sidebarPathCollapsed = true
+	a.draw()
+	a.screen.Show()
+	_, collapsedY, collapsedW, collapsedH := a.sidebarPathRect()
+	if collapsedH != 1 {
+		t.Fatalf("collapsed height = %d, want 1", collapsedH)
+	}
+	collapsed := screenLine(a.screen.(tcell.SimulationScreen), collapsedY)[:collapsedW]
+	if !strings.Contains(collapsed, "PATH INFO ▼") {
+		t.Fatalf("collapsed header = %q, want PATH INFO ▼", collapsed)
+	}
+	for _, label := range []string{"Path type", "Relative", "Absolute", "Strip prefix", "Current path"} {
+		if strings.Contains(collapsed, label) {
+			t.Fatalf("collapsed header contains body label %q: %q", label, collapsed)
+		}
+	}
+}
+
+// TestSidebarPathHeaderCollapseGesture treats a header press as one gesture
+// even though the tree grows beneath the held pointer after the toggle.
+func TestSidebarPathHeaderCollapseGesture(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.spiceConfigPath = filepath.Join(t.TempDir(), "config.json")
+	a.sidebarPathPrefixFocused = true
+	a.sidebarPathPrefixScroll = 4
+	a.tree.SelectedPath = a.rootDir
+	copied := recordingClipboard(a, nil)
+	_, headerY, _, _ := a.sidebarPathRect()
+
+	a.handleMouse(tcell.NewEventMouse(2, headerY, tcell.Button1, tcell.ModNone))
+	if !a.sidebarPathCollapsed || a.dragMode != "path" {
+		t.Fatalf("collapse state/drag = %v/%q, want true/path", a.sidebarPathCollapsed, a.dragMode)
+	}
+	if a.sidebarPathPrefixFocused || a.sidebarPathPrefixScroll != 0 {
+		t.Fatalf("collapse focus/scroll = %v/%d, want false/0", a.sidebarPathPrefixFocused, a.sidebarPathPrefixScroll)
+	}
+	if got := len(*copied); got != 0 {
+		t.Fatalf("header toggle copied %d paths, want 0", got)
+	}
+
+	// The old header row is now a tree row. A held Button1 motion must not
+	// route into that newly exposed row or persist/toggle a second time.
+	a.handleMouse(tcell.NewEventMouse(2, headerY, tcell.Button1, tcell.ModNone))
+	if !a.sidebarPathCollapsed || a.dragMode != "path" {
+		t.Fatalf("held motion state/drag = %v/%q, want true/path", a.sidebarPathCollapsed, a.dragMode)
+	}
+	a.handleMouse(tcell.NewEventMouse(2, headerY, tcell.ButtonNone, tcell.ModNone))
+	if a.dragMode != "" {
+		t.Fatalf("release dragMode = %q, want cleared", a.dragMode)
+	}
+
+	data, err := os.ReadFile(a.spiceConfigPath)
+	if err != nil {
+		t.Fatalf("read persisted config: %v", err)
+	}
+	if !strings.Contains(string(data), `"sidebar_path_collapsed": true`) {
+		t.Fatalf("collapsed state was not persisted: %s", data)
+	}
+
+	_, headerY, _, _ = a.sidebarPathRect()
+	a.handleMouse(tcell.NewEventMouse(2, headerY, tcell.Button1, tcell.ModNone))
+	if a.sidebarPathCollapsed || a.dragMode != "path" {
+		t.Fatalf("independent expand state/drag = %v/%q, want false/path", a.sidebarPathCollapsed, a.dragMode)
+	}
+	a.handleMouse(tcell.NewEventMouse(2, headerY, tcell.ButtonNone, tcell.ModNone))
+	data, err = os.ReadFile(a.spiceConfigPath)
+	if err != nil {
+		t.Fatalf("read expanded config: %v", err)
+	}
+	if !strings.Contains(string(data), `"sidebar_path_collapsed": false`) {
+		t.Fatalf("expanded state was not persisted: %s", data)
+	}
+}
+
+// TestSidebarPathCollapsePersistenceFailure keeps the visible state useful
+// when a malformed config cannot be updated, while reporting the failure.
+func TestSidebarPathCollapsePersistenceFailure(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.spiceConfigPath = filepath.Join(t.TempDir(), "config.json")
+	const malformed = `{"sidebar_path_collapsed":`
+	if err := os.WriteFile(a.spiceConfigPath, []byte(malformed), 0o600); err != nil {
+		t.Fatalf("seed malformed config: %v", err)
+	}
+	_, headerY, _, _ := a.sidebarPathRect()
+	a.handleMouse(tcell.NewEventMouse(2, headerY, tcell.Button1, tcell.ModNone))
+	if !a.sidebarPathCollapsed {
+		t.Fatal("persistence failure reverted the in-memory collapsed state")
+	}
+	if !strings.HasPrefix(a.statusMsg, "config:") {
+		t.Fatalf("status = %q, want config error", a.statusMsg)
+	}
+	data, err := os.ReadFile(a.spiceConfigPath)
+	if err != nil {
+		t.Fatalf("read malformed config: %v", err)
+	}
+	if string(data) != malformed {
+		t.Fatalf("malformed config was overwritten: %q", data)
+	}
+}
+
+// TestSidebarPathCollapsedInputIsolation keeps the single-row header from
+// becoming a tree context, wheel, radio, or prefix-input target.
+func TestSidebarPathCollapsedInputIsolation(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 40; i++ {
+		if err := os.WriteFile(filepath.Join(root, "file"+string(rune('a'+i))+".txt"), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := newTestApp(t, root)
+	path := filepath.Join(root, "active.txt")
+	if err := os.WriteFile(path, []byte(strings.Repeat("line\n", 80)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a.openFile(path)
+	a.sidebarPathCollapsed = true
+	a.draw()
+	_, headerY, _, _ := a.sidebarPathRect()
+	tab := a.activeTabPtr()
+	if tab == nil {
+		t.Fatal("expected active text tab")
+	}
+
+	a.handleMouse(tcell.NewEventMouse(1, headerY, tcell.Button3, tcell.ModNone))
+	a.handleMouse(tcell.NewEventMouse(1, headerY, tcell.WheelDown, tcell.ModNone))
+	a.handleMouse(tcell.NewEventMouse(1, headerY, tcell.WheelRight, tcell.ModNone))
+	if a.contextOpen || a.menuOpen {
+		t.Fatal("collapsed header opened a context or main menu")
+	}
+	if a.tree.ScrollY != 0 || tab.ScrollY != 0 || tab.ScrollX != 0 {
+		t.Fatalf("collapsed header scrolled tree/editor to %d/%d/%d", a.tree.ScrollY, tab.ScrollY, tab.ScrollX)
+	}
+	if a.handleSidebarPathMouse(2, headerY+1) || a.sidebarPathPrefixFocused {
+		t.Fatal("collapsed body remained a path panel input target")
+	}
+}
+
+// TestSidebarPathCollapseRestoresEditorCursor verifies hiding a focused
+// prefix field leaves the final terminal cursor with the active editor.
+func TestSidebarPathCollapseRestoresEditorCursor(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(path, []byte("content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, root)
+	a.openFile(path)
+	a.draw()
+	a.screen.Show()
+	baselineX, baselineY, baselineVisible := a.screen.(tcell.SimulationScreen).GetCursor()
+	if !baselineVisible {
+		t.Fatal("expected editor cursor before focusing PATH INFO")
+	}
+	a.sidebarPathPrefixFocused = true
+	_, headerY, _, _ := a.sidebarPathRect()
+	a.handleMouse(tcell.NewEventMouse(2, headerY, tcell.Button1, tcell.ModNone))
+	a.handleMouse(tcell.NewEventMouse(2, headerY, tcell.ButtonNone, tcell.ModNone))
+	a.draw()
+	a.screen.Show()
+	gotX, gotY, visible := a.screen.(tcell.SimulationScreen).GetCursor()
+	if !visible || gotX != baselineX || gotY != baselineY {
+		t.Fatalf("cursor = (%d,%d,%v), want editor (%d,%d,true)", gotX, gotY, visible, baselineX, baselineY)
+	}
+}
+
+// TestSidebarPathCollapseUnavailableDoesNotPersist keeps missing panel
+// geometry from making a hidden, single-file, or tiny-layout click durable.
+func TestSidebarPathCollapseUnavailableDoesNotPersist(t *testing.T) {
+	for _, setup := range []struct {
+		name  string
+		apply func(*App)
+	}{
+		{name: "hidden", apply: func(a *App) { a.sidebarShown = false }},
+		{name: "tree-less", apply: func(a *App) { a.tree = nil }},
+		{name: "tiny", apply: func(a *App) { a.height = sidebarPathExpandedHeight }},
+	} {
+		t.Run(setup.name, func(t *testing.T) {
+			a := newTestApp(t, t.TempDir())
+			a.spiceConfigPath = filepath.Join(t.TempDir(), "config.json")
+			setup.apply(a)
+			if x, y, w, h := a.sidebarPathRect(); x != 0 || y != 0 || w != 0 || h != 0 || a.sidebarPathHeight() != 0 {
+				t.Fatalf("unavailable panel = (%d,%d,%d,%d), height=%d", x, y, w, h, a.sidebarPathHeight())
+			}
+			a.handleMouse(tcell.NewEventMouse(1, 0, tcell.Button1, tcell.ModNone))
+			if _, err := os.Stat(a.spiceConfigPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unavailable panel persisted config: %v", err)
+			}
+		})
+	}
+}
+
 // TestDrawSidebarPath renders panel content only in its reserved bottom rows,
 // marks invalid prefixes as errors, and never touches the clipboard.
 func TestDrawSidebarPath(t *testing.T) {

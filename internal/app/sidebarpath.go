@@ -15,6 +15,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/cloudmanic/spice-edit/internal/clipboard"
+	"github.com/cloudmanic/spice-edit/internal/spiceconfig"
 	"github.com/cloudmanic/spice-edit/internal/termtext"
 )
 
@@ -25,7 +26,12 @@ type sidebarPathType uint8
 const (
 	sidebarPathRelative sidebarPathType = iota
 	sidebarPathAbsolute
-	sidebarPathPanelHeight = 8
+	sidebarPathExpandedHeight  = 8
+	sidebarPathCollapsedHeight = 1
+
+	// sidebarPathPanelHeight remains an alias for tests and callers that refer
+	// to the original expanded-only panel height.
+	sidebarPathPanelHeight = sidebarPathExpandedHeight
 )
 
 // currentSidebarPath returns the selected path rendered for the panel and
@@ -72,7 +78,7 @@ func (a *App) copyCurrentSidebarPath(force bool) {
 // sidebarPathInputRect returns the rendered prefix field's clickable cells.
 func (a *App) sidebarPathInputRect() (x, y, w int) {
 	x, y, panelW, panelH := a.sidebarPathRect()
-	if panelW <= 0 || panelH == 0 {
+	if panelW <= 0 || panelH < sidebarPathExpandedHeight {
 		return 0, 0, 0
 	}
 	relative, absolute := "( ) Relative", "( ) Absolute"
@@ -102,6 +108,15 @@ func (a *App) handleSidebarPathMouse(x, y int) bool {
 	panelX, panelY, panelW, panelH := a.sidebarPathRect()
 	if !pointInRect(x, y, panelX, panelY, panelW, panelH) {
 		return false
+	}
+	if y == panelY {
+		a.sidebarPathCollapsed = !a.sidebarPathCollapsed
+		a.sidebarPathPrefixFocused = false
+		a.sidebarPathPrefixScroll = 0
+		if err := spiceconfig.SetSidebarPathCollapsed(a.spiceConfigPath, a.sidebarPathCollapsed); err != nil {
+			a.flash("config: " + err.Error())
+		}
+		return true
 	}
 
 	relative, absolute := "( ) Relative", "( ) Absolute"
@@ -222,7 +237,14 @@ func (a *App) drawSidebarPath() {
 	valueStyle := bgStyle.Foreground(a.theme.Text)
 	selectedStyle := bgStyle.Foreground(a.theme.Accent)
 
-	drawAtWidth(a.screen, x, y, w, " ─ PATH INFO", titleStyle)
+	toggle := "▲"
+	if a.sidebarPathCollapsed {
+		toggle = "▼"
+	}
+	drawAtWidth(a.screen, x, y, w, " ─ PATH INFO "+toggle, titleStyle)
+	if a.sidebarPathCollapsed {
+		return
+	}
 	drawAtWidth(a.screen, x+1, y+1, w-1, "Path type", labelStyle)
 	relative, absolute := "( ) Relative", "( ) Absolute"
 	relativeStyle, absoluteStyle := valueStyle, valueStyle

@@ -198,6 +198,8 @@ Then:
   invalid prefix turns red and leaves the unstripped path intact. Selecting a
   node or changing either control automatically copies the full current value
   to the system clipboard, even when the sidebar shortens its on-screen display.
+  Its `▲`/`▼` header control collapses or expands the panel. It starts expanded,
+  and SpiceEdit remembers the choice in `config.json`.
 - Click and drag in the editor to select; drag past the top or bottom
   edge to auto-scroll the selection.
 

@@ -422,7 +422,7 @@ type App struct {
 	statusUntil        time.Time
 	openPath           pathOpener
 	revealPath         pathRevealer
-	dragMode           string // "editor", "sidebar", or "tree" while a mouse press is held.
+	dragMode           string // "editor", "sidebar", "tree", or "path" while a mouse press is held.
 	lastClick          clickRecord
 	lastTabRects       []tabRect
 
@@ -1359,6 +1359,20 @@ func (a *App) sidebarW() int {
 	return a.sidebarWidth
 }
 
+// sidebarPathHeight returns the currently reserved height of the PATH INFO
+// panel. It stays unavailable in tiny layouts even when collapsed so a resize
+// cannot make a held header press become a tree press.
+func (a *App) sidebarPathHeight() int {
+	if !a.sidebarShown || a.tree == nil || a.sidebarWidth <= 1 ||
+		a.height-1 < sidebarPathExpandedHeight {
+		return 0
+	}
+	if a.sidebarPathCollapsed {
+		return sidebarPathCollapsedHeight
+	}
+	return sidebarPathExpandedHeight
+}
+
 // sidebarRect returns the file tree's render rectangle above the path panel.
 // It is one column narrower than the sidebar block because the rightmost
 // column belongs to the resize splitter. Zero width when the sidebar is hidden.
@@ -1367,7 +1381,7 @@ func (a *App) sidebarRect() (x, y, w, h int) {
 	if sw <= 0 {
 		return 0, 0, 0, 0
 	}
-	h = a.height - 1 - sidebarPathPanelHeight
+	h = a.height - 1 - a.sidebarPathHeight()
 	if h < 0 {
 		h = 0
 	}
@@ -1375,12 +1389,13 @@ func (a *App) sidebarRect() (x, y, w, h int) {
 }
 
 // sidebarPathRect returns the path panel below the tree. It only exists when
-// a visible tree has enough rows to show the complete compact panel.
+// a visible tree has enough rows to show the complete expanded panel.
 func (a *App) sidebarPathRect() (x, y, w, h int) {
-	if !a.sidebarShown || a.tree == nil || a.height-1 < sidebarPathPanelHeight {
+	h = a.sidebarPathHeight()
+	if h == 0 {
 		return 0, 0, 0, 0
 	}
-	return 0, a.height - 1 - sidebarPathPanelHeight, a.sidebarWidth - 1, sidebarPathPanelHeight
+	return 0, a.height - 1 - h, a.sidebarWidth - 1, h
 }
 
 // splitterX returns the x coordinate of the resize splitter column, or -1
@@ -1813,9 +1828,16 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		return
 	}
 
+	// PATH INFO presses also act once on button-down. In particular, a header
+	// press may collapse the panel and reveal a tree row under the held cursor.
+	if leftDown && a.dragMode == "path" {
+		return
+	}
+
 	// Initial press dispatch.
 	if leftDown && a.dragMode == "" {
 		if a.handleSidebarPathMouse(x, y) {
+			a.dragMode = "path"
 			return
 		}
 		a.sidebarPathPrefixFocused = false
