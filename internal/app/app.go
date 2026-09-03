@@ -406,6 +406,7 @@ type App struct {
 	sidebarPathPrefixScroll  int
 	sidebarPathPrefixFocused bool
 	sidebarPathLastCopied    string
+	sidebarPathHasCopied     bool
 
 	clipBuf            string
 	copyToSystem       func(string) error
@@ -1859,9 +1860,15 @@ func (a *App) handleMenuMouse(x, y int, btn tcell.ButtonMask) {
 
 // scrollAt scrolls whichever panel the (x, y) cursor is over.
 func (a *App) scrollAt(x, y, delta int) {
+	if a.sidebarPathContains(x, y) {
+		return
+	}
 	sx, sy, sw, sh := a.sidebarRect()
 	if a.tree != nil && pointInRect(x, y, sx, sy, sw, sh) {
 		a.tree.Scroll(delta)
+		return
+	}
+	if sw := a.sidebarW(); sw > 0 && x < sw {
 		return
 	}
 	if y > 0 && y < a.height-1 {
@@ -1918,6 +1925,7 @@ func (a *App) tryTreeContextClick(x, y int) bool {
 	if !ok {
 		return false
 	}
+	a.sidebarPathPrefixFocused = false
 	if n.IsDir {
 		a.setActiveFolder(n.Path)
 	} else {

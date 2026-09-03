@@ -53,7 +53,8 @@ func (a *App) currentSidebarPath() (string, bool) {
 // status success message alone so path browsing does not disturb text editing.
 func (a *App) copyCurrentSidebarPath(force bool) {
 	value, _ := a.currentSidebarPath()
-	if a.tree == nil || a.tree.SelectedPath == "" || (!force && value == a.sidebarPathLastCopied) {
+	if a.tree == nil || a.tree.SelectedPath == "" ||
+		(!force && a.sidebarPathHasCopied && value == a.sidebarPathLastCopied) {
 		return
 	}
 	copyToSystem := a.copyToSystem
@@ -65,6 +66,7 @@ func (a *App) copyCurrentSidebarPath(force bool) {
 		return
 	}
 	a.sidebarPathLastCopied = value
+	a.sidebarPathHasCopied = true
 }
 
 // sidebarPathInputRect returns the rendered prefix field's clickable cells.
@@ -161,6 +163,9 @@ func (a *App) handleSidebarPathKey(ev *tcell.EventKey) {
 	changed := false
 	switch ev.Key() {
 	case tcell.KeyRune:
+		if ev.Rune() < 0x20 {
+			break
+		}
 		a.sidebarPathPrefix = append(a.sidebarPathPrefix, 0)
 		copy(a.sidebarPathPrefix[cursor+1:], a.sidebarPathPrefix[cursor:])
 		a.sidebarPathPrefix[cursor] = ev.Rune()

@@ -95,6 +95,32 @@ func TestSidebarPathCopy_EventScoped(t *testing.T) {
 	}
 }
 
+// TestSidebarPathCopy_EmptyValueTracksSuccessfulWrites keeps a successful
+// empty path distinct from the initial state so prefix "." can clear the
+// system clipboard exactly once.
+func TestSidebarPathCopy_EmptyValueTracksSuccessfulWrites(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.tree.SelectedPath = a.rootDir
+	a.sidebarPathPrefix = []rune(".")
+	copied := recordingClipboard(a, nil)
+
+	a.copyCurrentSidebarPath(false)
+	a.copyCurrentSidebarPath(false)
+	if got := *copied; len(got) != 1 || got[0] != "" {
+		t.Fatalf("empty path copies = %#v, want one empty write", got)
+	}
+	if !a.sidebarPathHasCopied {
+		t.Fatal("successful empty copy was not recorded")
+	}
+
+	a.copyToSystem = func(string) error { return errors.New("clipboard down") }
+	a.sidebarPathHasCopied = false
+	a.copyCurrentSidebarPath(false)
+	if a.sidebarPathHasCopied {
+		t.Fatal("failed empty copy was recorded as successful")
+	}
+}
+
 // TestSidebarPathMouse controls path mode and the rune-indexed prefix field
 // without allowing panel clicks to reach tree context handling.
 func TestSidebarPathMouse_RadioInputAndContextBoundary(t *testing.T) {
@@ -158,6 +184,10 @@ func TestSidebarPathKeyAndPaste(t *testing.T) {
 		t.Fatalf("right cursor/copies = %d/%d", a.sidebarPathPrefixCursor, len(*copied))
 	}
 	a.handleSidebarPathKey(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone))
+	a.handleSidebarPathKey(tcell.NewEventKey(tcell.KeyRune, 0x01, tcell.ModNone))
+	if got := string(a.sidebarPathPrefix); got != "中a" || len(*copied) != 0 {
+		t.Fatalf("control rune changed prefix/copies to %q/%d", got, len(*copied))
+	}
 	a.handleSidebarPathKey(tcell.NewEventKey(tcell.KeyRune, 'x', tcell.ModNone))
 	if got := string(a.sidebarPathPrefix); got != "中xa" {
 		t.Fatalf("rune edit = %q", got)
@@ -228,11 +258,24 @@ func TestSidebarPathWheel_ConfinesTreeScrolling(t *testing.T) {
 		}
 	}
 	a := newTestApp(t, root)
+	activePath := filepath.Join(root, "active.txt")
+	if err := os.WriteFile(activePath, []byte(strings.Repeat("line\n", 80)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a.openFile(activePath)
 	a.draw()
 	_, py, _, _ := a.sidebarPathRect()
+	tab := a.activeTabPtr()
+	if tab == nil {
+		t.Fatal("expected active text tab")
+	}
+	tabScroll := tab.ScrollY
 	a.scrollAt(1, py, wheelLines)
 	if a.tree.ScrollY != 0 {
 		t.Fatalf("panel wheel scrolled tree to %d", a.tree.ScrollY)
+	}
+	if tab.ScrollY != tabScroll {
+		t.Fatalf("panel wheel scrolled editor to %d, want %d", tab.ScrollY, tabScroll)
 	}
 	a.scrollAt(1, 2, wheelLines)
 	if a.tree.ScrollY != wheelLines {

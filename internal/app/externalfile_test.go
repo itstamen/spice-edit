@@ -177,7 +177,11 @@ func TestTreeContextClick_CopiesSelectedPath(t *testing.T) {
 	a := newTestApp(t, dir)
 	copied := recordingClipboard(a, nil)
 
+	a.sidebarPathPrefixFocused = true
 	rightClickTreePath(t, a, path)
+	if a.sidebarPathPrefixFocused {
+		t.Fatal("tree context click did not blur sidebar path input")
+	}
 	rightClickTreePath(t, a, path)
 	if got := *copied; len(got) != 2 || got[0] != "notes.txt" || got[1] != "notes.txt" {
 		t.Fatalf("context copies = %#v", got)
