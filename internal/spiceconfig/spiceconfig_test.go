@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -132,6 +134,30 @@ func TestLoadSidebarPathCollapsed(t *testing.T) {
 	}
 }
 
+// TestLoadRejectsNonObjectConfig verifies Load shares the updater's contract:
+// a config file must contain a top-level JSON object, never null or a scalar.
+func TestLoadRejectsNonObjectConfig(t *testing.T) {
+	for _, body := range []string{"null", "[]", `"text"`, "true", "42"} {
+		t.Run(body, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+
+			cfg, err := Load(path)
+			if err == nil {
+				t.Fatalf("Load(%s) returned nil error", body)
+			}
+			if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "config must be a JSON object") {
+				t.Fatalf("Load(%s) error = %q, want path and object error", body, err)
+			}
+			if cfg != Defaults() {
+				t.Fatalf("Load(%s) config = %#v, want defaults %#v", body, cfg, Defaults())
+			}
+		})
+	}
+}
+
 // TestSetSidebarPathCollapsed verifies the narrow update API creates blank
 // configs and changes only its own top-level preference.
 func TestSetSidebarPathCollapsed(t *testing.T) {
@@ -141,6 +167,15 @@ func TestSetSidebarPathCollapsed(t *testing.T) {
 			t.Fatalf("SetSidebarPathCollapsed: %v", err)
 		}
 		assertStoredSidebarPathCollapsed(t, path, true)
+		if runtime.GOOS != "windows" {
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat result: %v", err)
+			}
+			if got := info.Mode().Perm(); got != 0o600 {
+				t.Fatalf("new config mode = %o, want 600", got)
+			}
+		}
 	})
 
 	t.Run("empty file", func(t *testing.T) {

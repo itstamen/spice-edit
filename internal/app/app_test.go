@@ -103,6 +103,24 @@ func TestLoadSpiceConfigMalformedSidebarPathCollapsed(t *testing.T) {
 	}
 }
 
+// TestLoadSpiceConfigNullSidebarPathCollapsed verifies a null top-level value
+// is rejected like every other non-object config and leaves the panel expanded.
+func TestLoadSpiceConfigNullSidebarPathCollapsed(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.spiceConfigPath = filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(a.spiceConfigPath, []byte("null"), 0o600); err != nil {
+		t.Fatalf("seed null config: %v", err)
+	}
+
+	a.loadSpiceConfig()
+	if a.sidebarPathCollapsed {
+		t.Fatal("sidebarPathCollapsed = true after null config, want false")
+	}
+	if !strings.HasPrefix(a.statusMsg, "config:") {
+		t.Fatalf("status = %q, want config error", a.statusMsg)
+	}
+}
+
 // TestInitializeCommandPasteStartupFailures verifies native startup errors
 // install deny/no-op hooks and surface the one expected status message.
 func TestInitializeCommandPasteStartupFailures(t *testing.T) {
