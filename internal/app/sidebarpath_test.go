@@ -56,16 +56,18 @@ func TestCurrentSidebarPath(t *testing.T) {
 // across native path separators without changing filesystem operation paths.
 func TestNormalizeSidebarPathValue(t *testing.T) {
 	for _, tt := range []struct {
-		name string
-		path string
-		want string
+		name      string
+		path      string
+		separator rune
+		want      string
 	}{
-		{name: "windows relative", path: `docs\superpowers\spec.md`, want: "docs/superpowers/spec.md"},
-		{name: "windows absolute", path: `C:\repo\docs\spec.md`, want: "C:/repo/docs/spec.md"},
-		{name: "forward slashes", path: "/repo/docs/spec.md", want: "/repo/docs/spec.md"},
+		{name: "windows relative", path: `docs\superpowers\spec.md`, separator: '\\', want: "docs/superpowers/spec.md"},
+		{name: "windows absolute", path: `C:\repo\docs\spec.md`, separator: '\\', want: "C:/repo/docs/spec.md"},
+		{name: "unix literal backslash", path: `docs\literal\name`, separator: '/', want: `docs\literal\name`},
+		{name: "forward slashes", path: "/repo/docs/spec.md", separator: '/', want: "/repo/docs/spec.md"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := normalizeSidebarPathValue(tt.path); got != tt.want {
+			if got := normalizeSidebarPathValue(tt.path, tt.separator); got != tt.want {
 				t.Fatalf("normalizeSidebarPathValue(%q) = %q, want %q", tt.path, got, tt.want)
 			}
 		})

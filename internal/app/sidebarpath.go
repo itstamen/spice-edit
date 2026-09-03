@@ -9,6 +9,7 @@ package app
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -36,8 +37,11 @@ const (
 
 // normalizeSidebarPathValue makes copied and rendered path values stable
 // across platforms without affecting filesystem paths used by editor actions.
-func normalizeSidebarPathValue(value string) string {
-	return strings.ReplaceAll(value, `\`, "/")
+func normalizeSidebarPathValue(value string, separator rune) string {
+	if separator == '/' {
+		return value
+	}
+	return strings.ReplaceAll(value, string(separator), "/")
 }
 
 // currentSidebarPath returns the selected path rendered for the panel and
@@ -50,7 +54,7 @@ func (a *App) currentSidebarPath() (string, bool) {
 	if a.sidebarPathType == sidebarPathAbsolute {
 		value = absolutePathFor(a.tree.SelectedPath)
 	}
-	value = normalizeSidebarPathValue(value)
+	value = normalizeSidebarPathValue(value, filepath.Separator)
 	prefix := string(a.sidebarPathPrefix)
 	if prefix == "" {
 		return value, true

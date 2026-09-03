@@ -278,6 +278,57 @@ func TestSetSidebarPathCollapsed(t *testing.T) {
 		}
 	})
 
+	t.Run("preserves existing symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		targetPath := filepath.Join(dir, "managed.json")
+		configPath := filepath.Join(dir, "config.json")
+		body := `{"theme":"future","unknown":{"a":1}}`
+		if err := os.WriteFile(targetPath, []byte(body), 0o644); err != nil {
+			t.Fatalf("seed target: %v", err)
+		}
+		if err := os.Symlink(filepath.Base(targetPath), configPath); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+
+		if err := SetSidebarPathCollapsed(configPath, true); err != nil {
+			t.Fatalf("SetSidebarPathCollapsed: %v", err)
+		}
+		info, err := os.Lstat(configPath)
+		if err != nil {
+			t.Fatalf("lstat config symlink: %v", err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("config path mode = %v, want symlink", info.Mode())
+		}
+		data, err := os.ReadFile(targetPath)
+		if err != nil {
+			t.Fatalf("read resolved target: %v", err)
+		}
+		var got map[string]json.RawMessage
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatalf("parse resolved target: %v", err)
+		}
+		assertJSONValue(t, got, "theme", `"future"`)
+		assertJSONValue(t, got, "unknown", `{"a":1}`)
+		assertJSONValue(t, got, "sidebar_path_collapsed", `true`)
+		if runtime.GOOS != "windows" {
+			info, err := os.Stat(targetPath)
+			if err != nil {
+				t.Fatalf("stat resolved target: %v", err)
+			}
+			if got := info.Mode().Perm(); got != 0o600 {
+				t.Fatalf("resolved target mode = %o, want 600", got)
+			}
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read config directory: %v", err)
+		}
+		if len(entries) != 2 || entries[0].Name() != "config.json" || entries[1].Name() != "managed.json" {
+			t.Fatalf("symlink update left artifacts: %#v", entries)
+		}
+	})
+
 	t.Run("malformed file remains unchanged", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "config.json")
 		body := []byte(`{"icons":`)

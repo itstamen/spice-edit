@@ -161,6 +161,16 @@ func SetSidebarPathCollapsed(path string, collapsed bool) error {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
+	writePath := path
+	info, err := os.Lstat(path)
+	if err == nil && info.Mode()&os.ModeSymlink != 0 {
+		writePath, err = filepath.EvalSymlinks(path)
+		if err != nil {
+			return fmt.Errorf("resolve %s: %w", path, err)
+		}
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("lstat %s: %w", path, err)
+	}
 
 	values := make(map[string]json.RawMessage)
 	if len(strings.TrimSpace(string(data))) != 0 {
@@ -184,11 +194,11 @@ func SetSidebarPathCollapsed(path string, collapsed bool) error {
 	}
 	data = append(data, '\n')
 
-	dir := filepath.Dir(path)
+	dir := filepath.Dir(writePath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", path, err)
 	}
-	temp, err := os.CreateTemp(dir, "."+filepath.Base(path)+"-*")
+	temp, err := os.CreateTemp(dir, "."+filepath.Base(writePath)+"-*")
 	if err != nil {
 		return fmt.Errorf("create temp %s: %w", path, err)
 	}
@@ -217,7 +227,7 @@ func SetSidebarPathCollapsed(path string, collapsed bool) error {
 	if err := temp.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", path, err)
 	}
-	if err := renameFile(tempPath, path); err != nil {
+	if err := renameFile(tempPath, writePath); err != nil {
 		return fmt.Errorf("rename %s: %w", path, err)
 	}
 	removeTemp = false
