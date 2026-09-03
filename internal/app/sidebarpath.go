@@ -34,6 +34,12 @@ const (
 	sidebarPathPanelHeight = sidebarPathExpandedHeight
 )
 
+// normalizeSidebarPathValue makes copied and rendered path values stable
+// across platforms without affecting filesystem paths used by editor actions.
+func normalizeSidebarPathValue(value string) string {
+	return strings.ReplaceAll(value, `\`, "/")
+}
+
 // currentSidebarPath returns the selected path rendered for the panel and
 // whether its configured strip prefix matches that rendered value.
 func (a *App) currentSidebarPath() (string, bool) {
@@ -44,6 +50,7 @@ func (a *App) currentSidebarPath() (string, bool) {
 	if a.sidebarPathType == sidebarPathAbsolute {
 		value = absolutePathFor(a.tree.SelectedPath)
 	}
+	value = normalizeSidebarPathValue(value)
 	prefix := string(a.sidebarPathPrefix)
 	if prefix == "" {
 		return value, true

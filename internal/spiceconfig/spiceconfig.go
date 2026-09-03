@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +44,10 @@ const (
 	IconsOn   IconsMode = "on"
 	IconsOff  IconsMode = "off"
 )
+
+// renameFile is replaced by focused tests to prove a failed final replacement
+// leaves the live config intact.
+var renameFile = os.Rename
 
 // Config is the resolved, validated form of config.json. Callers get a
 // fully-populated Config back from Load — defaults are filled in for
@@ -179,11 +184,42 @@ func SetSidebarPathCollapsed(path string, collapsed bool) error {
 	}
 	data = append(data, '\n')
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", path, err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
+	temp, err := os.CreateTemp(dir, "."+filepath.Base(path)+"-*")
+	if err != nil {
+		return fmt.Errorf("create temp %s: %w", path, err)
 	}
+	tempPath := temp.Name()
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if err := temp.Chmod(0o600); err != nil {
+		_ = temp.Close()
+		return fmt.Errorf("chmod %s: %w", path, err)
+	}
+	if written, err := temp.Write(data); err != nil {
+		_ = temp.Close()
+		return fmt.Errorf("write %s: %w", path, err)
+	} else if written != len(data) {
+		_ = temp.Close()
+		return fmt.Errorf("write %s: %w", path, io.ErrShortWrite)
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return fmt.Errorf("sync %s: %w", path, err)
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", path, err)
+	}
+	if err := renameFile(tempPath, path); err != nil {
+		return fmt.Errorf("rename %s: %w", path, err)
+	}
+	removeTemp = false
 	return nil
 }

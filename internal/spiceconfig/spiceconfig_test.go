@@ -9,6 +9,7 @@ package spiceconfig
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -228,6 +229,53 @@ func TestSetSidebarPathCollapsed(t *testing.T) {
 		assertJSONValue(t, got, "theme", `"future"`)
 		assertJSONValue(t, got, "unknown", `{"a":1}`)
 		assertJSONValue(t, got, "sidebar_path_collapsed", `true`)
+		if runtime.GOOS != "windows" {
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat result: %v", err)
+			}
+			if got := info.Mode().Perm(); got != 0o600 {
+				t.Fatalf("updated config mode = %o, want 600", got)
+			}
+		}
+		entries, err := os.ReadDir(filepath.Dir(path))
+		if err != nil {
+			t.Fatalf("read config directory: %v", err)
+		}
+		if len(entries) != 1 || entries[0].Name() != filepath.Base(path) {
+			t.Fatalf("config update left artifacts: %#v", entries)
+		}
+	})
+
+	t.Run("rename failure preserves existing file and cleans temp", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.json")
+		body := []byte(`{"theme":"future"}`)
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		originalRename := renameFile
+		renameFile = func(string, string) error { return errors.New("rename unavailable") }
+		t.Cleanup(func() { renameFile = originalRename })
+
+		if err := SetSidebarPathCollapsed(path, true); err == nil {
+			t.Fatal("SetSidebarPathCollapsed(rename failure) returned nil error")
+		} else if !strings.Contains(err.Error(), path) {
+			t.Fatalf("rename error = %q, want path context", err)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read preserved config: %v", err)
+		}
+		if string(got) != string(body) {
+			t.Fatalf("existing config changed: got %q, want %q", got, body)
+		}
+		entries, err := os.ReadDir(filepath.Dir(path))
+		if err != nil {
+			t.Fatalf("read config directory: %v", err)
+		}
+		if len(entries) != 1 || entries[0].Name() != filepath.Base(path) {
+			t.Fatalf("rename failure left artifacts: %#v", entries)
+		}
 	})
 
 	t.Run("malformed file remains unchanged", func(t *testing.T) {

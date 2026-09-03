@@ -29,26 +29,46 @@ func TestCurrentSidebarPath(t *testing.T) {
 	a.tree.SelectedPath = child
 
 	got, valid := a.currentSidebarPath()
-	if got != filepath.Join("pkg", "file.go") || !valid {
+	if got != "pkg/file.go" || !valid {
 		t.Fatalf("default relative = %q, %v", got, valid)
 	}
 
 	a.sidebarPathType = sidebarPathAbsolute
 	got, valid = a.currentSidebarPath()
-	if got != child || !valid {
+	if got != filepath.ToSlash(child) || !valid {
 		t.Fatalf("absolute = %q, %v", got, valid)
 	}
 
-	a.sidebarPathPrefix = []rune(root + string(filepath.Separator))
+	a.sidebarPathPrefix = []rune(filepath.ToSlash(root) + "/")
 	got, valid = a.currentSidebarPath()
-	if got != filepath.Join("pkg", "file.go") || !valid {
+	if got != "pkg/file.go" || !valid {
 		t.Fatalf("stripped = %q, %v", got, valid)
 	}
 
 	a.sidebarPathPrefix = []rune("wrong/")
 	got, valid = a.currentSidebarPath()
-	if got != child || valid {
+	if got != filepath.ToSlash(child) || valid {
 		t.Fatalf("invalid prefix = %q, %v", got, valid)
+	}
+}
+
+// TestNormalizeSidebarPathValue keeps panel and clipboard values portable
+// across native path separators without changing filesystem operation paths.
+func TestNormalizeSidebarPathValue(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "windows relative", path: `docs\superpowers\spec.md`, want: "docs/superpowers/spec.md"},
+		{name: "windows absolute", path: `C:\repo\docs\spec.md`, want: "C:/repo/docs/spec.md"},
+		{name: "forward slashes", path: "/repo/docs/spec.md", want: "/repo/docs/spec.md"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeSidebarPathValue(tt.path); got != tt.want {
+				t.Fatalf("normalizeSidebarPathValue(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -138,7 +158,7 @@ func TestSidebarPathMouse_RadioInputAndContextBoundary(t *testing.T) {
 	if !a.handleSidebarPathMouse(x+16, y+2) || a.sidebarPathType != sidebarPathAbsolute {
 		t.Fatal("absolute radio was not handled")
 	}
-	if got := *copied; len(got) != 1 || got[0] != a.rootDir {
+	if got := *copied; len(got) != 1 || got[0] != filepath.ToSlash(a.rootDir) {
 		t.Fatalf("mode copy = %#v, want absolute root", got)
 	}
 
@@ -428,10 +448,10 @@ func TestSidebarPathPrefixPaste(t *testing.T) {
 	if got := string(a.sidebarPathPrefix); got != "docs/" {
 		t.Fatalf("prefix = %q, want docs/", got)
 	}
-	if got, valid := a.currentSidebarPath(); got != filepath.Join("superpowers", "spec.md") || !valid {
+	if got, valid := a.currentSidebarPath(); got != "superpowers/spec.md" || !valid {
 		t.Fatalf("current path = %q, %v, want superpowers/spec.md, true", got, valid)
 	}
-	if got := *copied; len(got) != 1 || got[0] != filepath.Join("superpowers", "spec.md") {
+	if got := *copied; len(got) != 1 || got[0] != "superpowers/spec.md" {
 		t.Fatalf("copies = %#v, want one suffix copy", got)
 	}
 }
@@ -637,6 +657,57 @@ func TestSidebarPathHeaderCollapseGesture(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"sidebar_path_collapsed": false`) {
 		t.Fatalf("expanded state was not persisted: %s", data)
+	}
+}
+
+// TestSidebarPathHeaderGestureConsumesCombinedWheelMasks keeps a backend's
+// Button1+wheel event inside the panel gesture after collapse moves the tree.
+func TestSidebarPathHeaderGestureConsumesCombinedWheelMasks(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 40; i++ {
+		if err := os.WriteFile(filepath.Join(root, "file"+string(rune('a'+i))+".txt"), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(root, "active.txt")
+	if err := os.WriteFile(path, []byte(strings.Repeat("a very long editor line ", 20)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, root)
+	a.openFile(path)
+	_, headerY, _, _ := a.sidebarPathRect()
+	a.handleMouse(tcell.NewEventMouse(2, headerY, tcell.Button1, tcell.ModNone))
+	if !a.sidebarPathCollapsed || a.dragMode != "path" {
+		t.Fatalf("collapse state/drag = %v/%q, want true/path", a.sidebarPathCollapsed, a.dragMode)
+	}
+
+	// The pre-collapse header row is now in the expanded tree rectangle.
+	a.handleMouse(tcell.NewEventMouse(1, headerY, tcell.Button1|tcell.WheelDown, tcell.ModNone))
+	if a.tree.ScrollY != 0 {
+		t.Fatalf("combined vertical wheel scrolled tree to %d", a.tree.ScrollY)
+	}
+	ex, ey, _, _ := a.editorRect()
+	tab := a.activeTabPtr()
+	if tab == nil {
+		t.Fatal("expected active text tab")
+	}
+	a.handleMouse(tcell.NewEventMouse(ex+1, ey+1, tcell.Button1|tcell.WheelRight, tcell.ModNone))
+	if tab.ScrollX != 0 {
+		t.Fatalf("combined horizontal wheel scrolled editor to %d", tab.ScrollX)
+	}
+
+	a.handleMouse(tcell.NewEventMouse(ex+1, ey+1, tcell.ButtonNone, tcell.ModNone))
+	if a.dragMode != "" {
+		t.Fatalf("release dragMode = %q, want cleared", a.dragMode)
+	}
+	_, collapsedHeaderY, _, _ := a.sidebarPathRect()
+	a.handleMouse(tcell.NewEventMouse(2, collapsedHeaderY, tcell.Button1, tcell.ModNone))
+	if a.sidebarPathCollapsed {
+		t.Fatal("independent header press did not expand panel")
+	}
+	a.handleMouse(tcell.NewEventMouse(2, collapsedHeaderY, tcell.ButtonNone, tcell.ModNone))
+	if a.dragMode != "" {
+		t.Fatalf("independent release dragMode = %q, want cleared", a.dragMode)
 	}
 }
 

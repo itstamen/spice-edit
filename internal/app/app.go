@@ -1747,6 +1747,14 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		return
 	}
 
+	leftDown := btn&tcell.Button1 != 0
+	// A tcell backend may combine Button1 and wheel bits in one event. Consume
+	// the complete PATH INFO gesture before wheel routing can reach the newly
+	// exposed tree or editor after a header toggle changes the panel geometry.
+	if leftDown && a.dragMode == "path" {
+		return
+	}
+
 	// Right-click handling. File-tree rows and rendered tabs get focused
 	// context menus; everywhere else falls through to the main action menu.
 	// Note: macOS Terminal + tmux often swallows Button3, which is why core
@@ -1804,8 +1812,6 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		return
 	}
 
-	leftDown := btn&tcell.Button1 != 0
-
 	// Drag continuation: while we're mid-drag in the editor, every event
 	// with the button held extends the selection — even if the cursor has
 	// wandered out of the editor pane.
@@ -1825,12 +1831,6 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	// Button1 still set, so consume the rest of the held gesture rather than
 	// repeatedly toggling or opening whichever row the pointer crosses.
 	if leftDown && a.dragMode == "tree" {
-		return
-	}
-
-	// PATH INFO presses also act once on button-down. In particular, a header
-	// press may collapse the panel and reveal a tree row under the held cursor.
-	if leftDown && a.dragMode == "path" {
 		return
 	}
 
