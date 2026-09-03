@@ -383,6 +383,59 @@ func TestSidebarPathKeyAndPaste(t *testing.T) {
 	}
 }
 
+// TestSidebarPathPrefixPaste keeps trailing terminal line endings out of the
+// visible prefix while preserving valid spaces and collapsing internal lines.
+func TestSidebarPathPrefixPaste(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		text string
+		want string
+	}{
+		{name: "trailing CRLF", text: "docs/\r\n", want: "docs/"},
+		{name: "trailing LF", text: "dir with spaces/\n", want: "dir with spaces/"},
+		{name: "internal LF", text: "a\nb\n", want: "a b"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeSidebarPathPrefixPaste(tt.text); got != tt.want {
+				t.Fatalf("normalized = %q, want %q", got, tt.want)
+			}
+		})
+	}
+
+	root := t.TempDir()
+	selected := filepath.Join(root, "docs", "superpowers", "spec.md")
+	if err := os.MkdirAll(filepath.Dir(selected), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(selected, []byte("spec"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, root)
+	a.tree.SelectedPath = selected
+	a.sidebarPathPrefixFocused = true
+	a.sidebarPathPrefixCursor = 0
+	copied := recordingClipboard(a, nil)
+
+	a.commandPasteRecent = func(time.Time) bool { return true }
+	a.handleEvent(tcell.NewEventPaste(true))
+	for _, r := range "docs/" {
+		a.handleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
+	}
+	a.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	a.handleEvent(tcell.NewEventKey(tcell.KeyCtrlJ, 0, tcell.ModNone))
+	a.handleEvent(tcell.NewEventPaste(false))
+
+	if got := string(a.sidebarPathPrefix); got != "docs/" {
+		t.Fatalf("prefix = %q, want docs/", got)
+	}
+	if got, valid := a.currentSidebarPath(); got != filepath.Join("superpowers", "spec.md") || !valid {
+		t.Fatalf("current path = %q, %v, want superpowers/spec.md, true", got, valid)
+	}
+	if got := *copied; len(got) != 1 || got[0] != filepath.Join("superpowers", "spec.md") {
+		t.Fatalf("copies = %#v, want one suffix copy", got)
+	}
+}
+
 // TestSidebarPathWheel confines vertical tree scrolling to the tree rectangle.
 func TestSidebarPathWheel_ConfinesTreeScrolling(t *testing.T) {
 	root := t.TempDir()

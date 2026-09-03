@@ -2776,6 +2776,14 @@ func normalizeSingleLinePaste(text string) string {
 	return strings.ReplaceAll(normalizePastedText(text), "\n", " ")
 }
 
+// normalizeSidebarPathPrefixPaste removes terminal line endings while
+// preserving meaningful spaces in a path prefix and flattening internal lines.
+func normalizeSidebarPathPrefixPaste(text string) string {
+	text = normalizePastedText(text)
+	text = strings.TrimRight(text, "\n")
+	return strings.ReplaceAll(text, "\n", " ")
+}
+
 // insertPastedRunes inserts text at a rune cursor and returns the updated
 // value and cursor. It is shared by every single-line text input modal.
 func insertPastedRunes(value []rune, cursor int, text string) ([]rune, int) {
@@ -2836,7 +2844,7 @@ func (a *App) routePastedText(text string) {
 		return
 	}
 	if a.sidebarPathPrefixFocused {
-		text = normalizeSingleLinePaste(text)
+		text = normalizeSidebarPathPrefixPaste(text)
 		if text == "" {
 			return
 		}
