@@ -111,11 +111,11 @@ func Load(path string) (Config, error) {
 		return cfg, nil
 	}
 
-	var raw any
+	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return cfg, fmt.Errorf("parse %s: %w", path, err)
+		return cfg, fmt.Errorf("parse %s: config must be a JSON object: %w", path, err)
 	}
-	if _, ok := raw.(map[string]any); !ok {
+	if raw == nil {
 		return cfg, fmt.Errorf("parse %s: config must be a JSON object", path)
 	}
 

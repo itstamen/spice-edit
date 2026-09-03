@@ -158,6 +158,23 @@ func TestLoadRejectsNonObjectConfig(t *testing.T) {
 	}
 }
 
+// TestLoadPreservesUnknownLargeNumber verifies shape validation does not parse
+// unknown numeric values into float64 and reject otherwise valid future config.
+func TestLoadPreservesUnknownLargeNumber(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"future":1e1000}`), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load(future large number): %v", err)
+	}
+	if cfg != Defaults() {
+		t.Fatalf("Load(future large number) = %#v, want defaults %#v", cfg, Defaults())
+	}
+}
+
 // TestSetSidebarPathCollapsed verifies the narrow update API creates blank
 // configs and changes only its own top-level preference.
 func TestSetSidebarPathCollapsed(t *testing.T) {
