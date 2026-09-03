@@ -191,6 +191,13 @@ Then:
   right_click_passthrough_modifier = "ctrl"
   ```
 - Drag the splitter between the sidebar and editor to resize.
+- The compact **PATH INFO** panel below the tree follows the exact node clicked
+  with either mouse button. **Relative** (the default) copies a path rooted at
+  the opened project directory; **Absolute** copies the full filesystem path.
+  **Strip prefix** removes a matching literal prefix from **Current path**. An
+  invalid prefix turns red and leaves the unstripped path intact. Selecting a
+  node or changing either control automatically copies the full current value
+  to the system clipboard, even when the sidebar shortens its on-screen display.
 - Click and drag in the editor to select; drag past the top or bottom
   edge to auto-scroll the selection.
 
