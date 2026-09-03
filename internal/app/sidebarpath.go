@@ -281,14 +281,20 @@ func drawSidebarPathTail(scr tcell.Screen, x, y, width int, value string, style 
 		return
 	}
 	clusters := termtext.Clusters(value)
-	start, used := len(clusters), 0
-	for start > 0 {
-		clusterWidth := clusters[start-1].Width
-		if clusterWidth > 0 && used+clusterWidth > 2*width {
-			break
+	start := len(clusters)
+	// Fill the final row backward first, then the preceding row. This mirrors
+	// the forward greedy line packing while accounting for unused cells at the
+	// end of a row (for example, double-width glyphs in an odd-width panel).
+	for row := 0; row < 2; row++ {
+		used := 0
+		for start > 0 {
+			clusterWidth := clusters[start-1].Width
+			if clusterWidth > width || (clusterWidth > 0 && used+clusterWidth > width) {
+				break
+			}
+			used += clusterWidth
+			start--
 		}
-		used += clusterWidth
-		start--
 	}
 
 	row, col := 0, 0

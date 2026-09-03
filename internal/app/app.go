@@ -420,7 +420,7 @@ type App struct {
 	statusUntil        time.Time
 	openPath           pathOpener
 	revealPath         pathRevealer
-	dragMode           string // "editor" while a drag-select is active.
+	dragMode           string // "editor", "sidebar", or "tree" while a mouse press is held.
 	lastClick          clickRecord
 	lastTabRects       []tabRect
 
@@ -1736,6 +1736,7 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 			a.sidebarPathPrefixFocused = false
 			return
 		}
+		a.sidebarPathPrefixFocused = false
 		if a.tryTreeContextClick(x, y) {
 			return
 		}
@@ -1800,6 +1801,13 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		return
 	}
 
+	// Tree presses act once on button-down. Terminals report motion with
+	// Button1 still set, so consume the rest of the held gesture rather than
+	// repeatedly toggling or opening whichever row the pointer crosses.
+	if leftDown && a.dragMode == "tree" {
+		return
+	}
+
 	// Initial press dispatch.
 	if leftDown && a.dragMode == "" {
 		if a.handleSidebarPathMouse(x, y) {
@@ -1808,10 +1816,12 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		a.sidebarPathPrefixFocused = false
 		sw := a.sidebarW()
 		splitX := a.splitterX()
+		treeX, treeY, treeW, treeH := a.sidebarRect()
 		switch {
 		case splitX >= 0 && x == splitX:
 			a.dragMode = "sidebar"
-		case sw > 0 && x < splitX:
+		case sw > 0 && pointInRect(x, y, treeX, treeY, treeW, treeH):
+			a.dragMode = "tree"
 			a.sidebarClick(x, y)
 		case y == 0:
 			a.tabBarClick(x, y)
@@ -3457,7 +3467,6 @@ func (a *App) draw() {
 	if a.sidebarShown && a.tree != nil {
 		sx, sy, sw, sh := a.sidebarRect()
 		a.tree.Render(a.screen, a.theme, sx, sy, sw, sh)
-		a.drawSidebarPath()
 		a.drawSplitter()
 	}
 
@@ -3476,6 +3485,13 @@ func (a *App) draw() {
 		}
 	} else {
 		a.drawEmptyEditor()
+	}
+
+	// Editor rendering owns the normal caret, so repaint PATH INFO afterward
+	// to restore its input caret when that field has focus. Find and modal
+	// overlays still draw later and retain final focus precedence.
+	if a.sidebarShown && a.tree != nil {
+		a.drawSidebarPath()
 	}
 
 	if a.findOpen {

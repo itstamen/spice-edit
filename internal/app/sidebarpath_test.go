@@ -159,6 +159,140 @@ func TestSidebarPathMouse_RadioInputAndContextBoundary(t *testing.T) {
 	}
 }
 
+// TestSidebarPathMouse_RightClickAwayBlursBeforeKeyboardRouting verifies each
+// right-click route outside PATH INFO gives its menu ownership of later keys.
+func TestSidebarPathMouse_RightClickAwayBlursBeforeKeyboardRouting(t *testing.T) {
+	t.Run("tree context", func(t *testing.T) {
+		a := newTestApp(t, t.TempDir())
+		a.sidebarPathPrefix = []rune("keep")
+		a.sidebarPathPrefixFocused = true
+		copied := recordingClipboard(a, nil)
+		a.draw()
+
+		a.handleMouse(tcell.NewEventMouse(1, 1, tcell.Button3, tcell.ModNone))
+		copyCount := len(*copied)
+		a.handleKey(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+
+		if a.sidebarPathPrefixFocused {
+			t.Fatal("tree context did not blur PATH INFO input")
+		}
+		if !a.contextOpen || a.contextHover != 1 {
+			t.Fatalf("contextOpen=%v hover=%d, want open at row 1", a.contextOpen, a.contextHover)
+		}
+		if got := string(a.sidebarPathPrefix); got != "keep" {
+			t.Fatalf("prefix = %q, want unchanged", got)
+		}
+		if got := len(*copied); got != copyCount {
+			t.Fatalf("keyboard copied %d paths, want %d", got, copyCount)
+		}
+	})
+
+	t.Run("tab context", func(t *testing.T) {
+		a, _ := seedCloseTabs(t, "a.txt", "b.txt")
+		a.sidebarPathPrefix = []rune("keep")
+		a.sidebarPathPrefixFocused = true
+		copied := recordingClipboard(a, nil)
+		a.draw()
+		r := a.lastTabRects[0]
+
+		a.handleMouse(tcell.NewEventMouse(r.X+1, 0, tcell.Button3, tcell.ModNone))
+		copyCount := len(*copied)
+		a.handleKey(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+
+		if a.sidebarPathPrefixFocused {
+			t.Fatal("tab context did not blur PATH INFO input")
+		}
+		if !a.contextOpen || a.contextHover != 1 {
+			t.Fatalf("contextOpen=%v hover=%d, want open at row 1", a.contextOpen, a.contextHover)
+		}
+		if got := string(a.sidebarPathPrefix); got != "keep" {
+			t.Fatalf("prefix = %q, want unchanged", got)
+		}
+		if got := len(*copied); got != copyCount {
+			t.Fatalf("keyboard copied %d paths, want %d", got, copyCount)
+		}
+	})
+
+	t.Run("editor main menu", func(t *testing.T) {
+		a, _ := seedCloseTabs(t, "a.txt", "b.txt")
+		a.sidebarPathPrefix = []rune("keep")
+		a.sidebarPathPrefixFocused = true
+		copied := recordingClipboard(a, nil)
+		a.draw()
+		ex, ey, _, _ := a.editorRect()
+
+		a.handleMouse(tcell.NewEventMouse(ex+2, ey+2, tcell.Button3, tcell.ModNone))
+		copyCount := len(*copied)
+		initialHover := a.hoveredMenuRow
+		a.handleKey(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+
+		if a.sidebarPathPrefixFocused {
+			t.Fatal("main menu did not blur PATH INFO input")
+		}
+		if !a.menuOpen || a.hoveredMenuRow == initialHover {
+			t.Fatalf("menuOpen=%v hover=%d, want keyboard navigation from %d", a.menuOpen, a.hoveredMenuRow, initialHover)
+		}
+		if got := string(a.sidebarPathPrefix); got != "keep" {
+			t.Fatalf("prefix = %q, want unchanged", got)
+		}
+		if got := len(*copied); got != copyCount {
+			t.Fatalf("keyboard copied %d paths, want %d", got, copyCount)
+		}
+	})
+}
+
+// TestSidebarPathMouse_TreePressConsumesMotion ensures a held tree press is
+// one gesture: motion cannot copy, retarget, or toggle nodes a second time.
+func TestSidebarPathMouse_TreePressConsumesMotion(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "a-dir")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "b.txt"), []byte("seed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, root)
+	copied := recordingClipboard(a, nil)
+	a.draw()
+
+	press := tcell.NewEventMouse(1, 2, tcell.Button1, tcell.ModNone)
+	a.handleMouse(press)
+	if a.dragMode != "tree" {
+		t.Fatalf("tree press dragMode = %q, want tree", a.dragMode)
+	}
+	if got := a.tree.SelectedPath; got != dir {
+		t.Fatalf("selected after press = %q, want %q", got, dir)
+	}
+	if !a.tree.Root.Children[0].Expanded {
+		t.Fatal("directory did not expand on initial press")
+	}
+
+	a.handleMouse(tcell.NewEventMouse(1, 2, tcell.Button1, tcell.ModNone))
+	a.handleMouse(tcell.NewEventMouse(1, 3, tcell.Button1, tcell.ModNone))
+	if got := len(*copied); got != 1 {
+		t.Fatalf("held motion copied %d paths, want 1", got)
+	}
+	if got := a.tree.SelectedPath; got != dir {
+		t.Fatalf("held motion selected %q, want %q", got, dir)
+	}
+	if !a.tree.Root.Children[0].Expanded {
+		t.Fatal("held motion collapsed directory")
+	}
+
+	a.handleMouse(tcell.NewEventMouse(1, 3, tcell.ButtonNone, tcell.ModNone))
+	if a.dragMode != "" {
+		t.Fatalf("release dragMode = %q, want cleared", a.dragMode)
+	}
+	a.handleMouse(press)
+	if got := len(*copied); got != 2 {
+		t.Fatalf("second press copies = %d, want 2", got)
+	}
+	if a.tree.Root.Children[0].Expanded {
+		t.Fatal("second independent press did not collapse directory")
+	}
+}
+
 // TestSidebarPathKeyAndPaste captures editing, focus termination, and paste
 // routing while ensuring all focused keys stay out of the active buffer.
 func TestSidebarPathKeyAndPaste(t *testing.T) {
@@ -401,6 +535,69 @@ func TestDrawSidebarPath(t *testing.T) {
 	}
 }
 
+// TestDrawSidebarPath_FocusedInputOwnsFinalCursor verifies editor rendering
+// cannot replace the terminal caret shown by the focused prefix input.
+func TestDrawSidebarPath_FocusedInputOwnsFinalCursor(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(path, []byte("content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, root)
+	a.openFile(path)
+	a.sidebarPathPrefix = []rune("pre")
+	a.sidebarPathPrefixCursor = 2
+	a.sidebarPathPrefixFocused = true
+
+	a.draw()
+	a.screen.Show()
+	inputX, inputY, _ := a.sidebarPathInputRect()
+	wantX := inputX + termtext.VisualCol(string(a.sidebarPathPrefix), a.sidebarPathPrefixCursor)
+	gotX, gotY, visible := a.screen.(tcell.SimulationScreen).GetCursor()
+	if !visible || gotX != wantX || gotY != inputY {
+		t.Fatalf("cursor = (%d,%d,%v), want (%d,%d,true)", gotX, gotY, visible, wantX, inputY)
+	}
+}
+
+// TestDrawSidebarPath_OverlaysRetainCursorPrecedence verifies later focus
+// layers still win even if stale PATH INFO focus state is present.
+func TestDrawSidebarPath_OverlaysRetainCursorPrecedence(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(path, []byte("content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("find", func(t *testing.T) {
+		a := newTestApp(t, root)
+		a.openFile(path)
+		a.openFind()
+		a.sidebarPathPrefixFocused = true
+		a.draw()
+		a.screen.Show()
+
+		barX, barY, _, _ := a.findBarRect()
+		wantX := barX + textWidth(" Find: ")
+		gotX, gotY, visible := a.screen.(tcell.SimulationScreen).GetCursor()
+		if !visible || gotX != wantX || gotY != barY {
+			t.Fatalf("find cursor = (%d,%d,%v), want (%d,%d,true)", gotX, gotY, visible, wantX, barY)
+		}
+	})
+
+	t.Run("menu", func(t *testing.T) {
+		a := newTestApp(t, root)
+		a.openFile(path)
+		a.openMenu()
+		a.sidebarPathPrefixFocused = true
+		a.draw()
+		a.screen.Show()
+
+		if x, y, visible := a.screen.(tcell.SimulationScreen).GetCursor(); visible {
+			t.Fatalf("menu left cursor visible at (%d,%d)", x, y)
+		}
+	})
+}
+
 // TestDrawSidebarPath_CompactRadioLayout keeps both path type choices visible
 // at the minimum supported sidebar width while retaining the eight-row panel.
 func TestDrawSidebarPath_CompactRadioLayout(t *testing.T) {
@@ -454,6 +651,63 @@ func TestDrawSidebarPathTail_CJKCombiningStaysInBounds(t *testing.T) {
 		line := screenLine(scr, y)[:6]
 		if termtext.StringWidth(line) > 6 {
 			t.Fatalf("tail row %d width = %d, want <= 6", y, termtext.StringWidth(line))
+		}
+	}
+}
+
+// TestDrawSidebarPathTail_OddWidthWideSuffixUsesBothRows verifies suffix
+// selection accounts for the unused cell left by wide glyphs on odd rows.
+func TestDrawSidebarPathTail_OddWidthWideSuffixUsesBothRows(t *testing.T) {
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("screen init: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(17, 2)
+	style := tcell.StyleDefault
+	for y := 0; y < 2; y++ {
+		scr.SetContent(15, y, '!', nil, style)
+	}
+
+	drawSidebarPathTail(scr, 0, 0, 15, "一二三四五六七八九十甲乙丙丁戊", style)
+	scr.Show()
+	first, _, _ := scr.Get(0, 0)
+	last, _, _ := scr.Get(12, 1)
+	if first != "二" || last != "戊" {
+		t.Fatalf("drawn suffix starts/ends %q/%q, want %q/%q", first, last, "二", "戊")
+	}
+	for y := 0; y < 2; y++ {
+		got, _, _ := scr.Get(15, y)
+		if got != "!" {
+			t.Fatalf("tail overwrote boundary at row %d: got %q", y, got)
+		}
+	}
+}
+
+// TestDrawSidebarPathTail_OversizedClusterIsSkipped verifies a grapheme wider
+// than a whole row cannot escape the drawing rectangle or hide a valid tail.
+func TestDrawSidebarPathTail_OversizedClusterIsSkipped(t *testing.T) {
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("screen init: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(2, 2)
+	style := tcell.StyleDefault
+	for y := 0; y < 2; y++ {
+		scr.SetContent(1, y, '!', nil, style)
+	}
+
+	drawSidebarPathTail(scr, 0, 0, 1, "中a", style)
+	scr.Show()
+	got, _, _ := scr.Get(0, 0)
+	if got != "a" {
+		t.Fatalf("tail after oversized cluster = %q, want %q", got, "a")
+	}
+	for y := 0; y < 2; y++ {
+		boundary, _, _ := scr.Get(1, y)
+		if boundary != "!" {
+			t.Fatalf("oversized cluster overwrote boundary at row %d: got %q", y, boundary)
 		}
 	}
 }
