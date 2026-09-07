@@ -80,10 +80,9 @@ func assertDefaultAppNotOpened(t *testing.T, opened <-chan string) {
 	}
 }
 
-// TestSidebarClick_ExternalRequiresConfirmation verifies that a tree click
-// opens confirmation without creating a placeholder and only launches after
-// an explicit Yes.
-func TestSidebarClick_ExternalRequiresConfirmation(t *testing.T) {
+// TestSidebarClick_ExternalDisplaysTab verifies a tree click opens the
+// external-file surface without confirmation or an automatic desktop launch.
+func TestSidebarClick_ExternalDisplaysTab(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "manual.pdf")
 	if err := os.WriteFile(target, []byte("%PDF-1.7"), 0o644); err != nil {
@@ -98,42 +97,111 @@ func TestSidebarClick_ExternalRequiresConfirmation(t *testing.T) {
 
 	clickTreePath(t, a, target)
 
-	if !a.confirmOpen || a.confirmHover != 0 {
-		t.Fatalf("confirm open=%v hover=%d, want open with No selected", a.confirmOpen, a.confirmHover)
+	if a.confirmOpen {
+		t.Fatal("external tree click opened a confirmation")
 	}
-	if a.confirmTitle != "Open with default app?" {
-		t.Fatalf("confirm title = %q", a.confirmTitle)
+	if len(a.tabs) != 1 || a.activeTabPtr() == nil || !a.activeTabPtr().IsExternal() {
+		t.Fatalf("external tree click tabs=%d active=%#v", len(a.tabs), a.activeTabPtr())
 	}
-	if !strings.Contains(a.confirmMessage, "manual.pdf") {
-		t.Fatalf("confirm message = %q", a.confirmMessage)
-	}
-	if len(a.tabs) != 0 || a.activeTabPtr() != nil {
-		t.Fatalf("external tree click created a tab: count=%d active=%#v", len(a.tabs), a.activeTabPtr())
+	if a.activeTabPtr().Path != target {
+		t.Fatalf("external tab path = %q, want %q", a.activeTabPtr().Path, target)
 	}
 	if a.activeFolder != dir || a.tree.ActiveFile != target {
 		t.Fatalf("tree context = folder %q file %q, want %q %q", a.activeFolder, a.tree.ActiveFile, dir, target)
 	}
 	assertDefaultAppNotOpened(t, opened)
+}
 
-	a.confirmHover = 1
-	a.confirmYes()
+// TestSidebarClick_ExternalFilesShareOneTab verifies a later unsupported file
+// replaces the first external surface without disturbing text-tab order.
+func TestSidebarClick_ExternalFilesShareOneTab(t *testing.T) {
+	dir := t.TempDir()
+	textPath := filepath.Join(dir, "notes.txt")
+	first := filepath.Join(dir, "manual.pdf")
+	second := filepath.Join(dir, "records.zip")
+	if err := os.WriteFile(textPath, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{first, second} {
+		if err := os.WriteFile(path, []byte{0, 1, 2}, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := newTestApp(t, dir)
+	opened := make(chan string, 1)
+	a.openPath = func(path string) error {
+		opened <- path
+		return nil
+	}
+
+	clickTreePath(t, a, textPath)
+	textTab := a.activeTabPtr()
+	clickTreePath(t, a, first)
+	if len(a.tabs) != 2 || a.tabs[0] != textTab || a.tabs[1].Path != first {
+		t.Fatalf("first external open tabs=%d paths=%q/%q", len(a.tabs), a.tabs[0].Path, a.tabs[1].Path)
+	}
+
+	clickTreePath(t, a, second)
+	if len(a.tabs) != 2 || a.tabs[0] != textTab || a.tabs[1].Path != second {
+		t.Fatalf("shared external tab tabs=%d paths=%q/%q", len(a.tabs), a.tabs[0].Path, a.tabs[1].Path)
+	}
+	if a.activeTab != 1 || a.confirmOpen {
+		t.Fatalf("activeTab=%d confirm=%v, want shared tab active without modal", a.activeTab, a.confirmOpen)
+	}
+	assertDefaultAppNotOpened(t, opened)
+}
+
+// TestExternalEditorAction_OpensActivePath verifies only the rendered action
+// launches the host default application for the displayed external file.
+func TestExternalEditorAction_OpensActivePath(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "manual.pdf")
+	if err := os.WriteFile(target, []byte("%PDF-1.7"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	opened := make(chan string, 1)
+	a.openPath = func(path string) error {
+		opened <- path
+		return nil
+	}
+	clickTreePath(t, a, target)
+	a.draw()
+
+	tab := a.activeTabPtr()
+	ex, ey, ew, eh := a.editorRect()
+	buttonX, buttonY := -1, -1
+	for y := ey; y < ey+eh && buttonX < 0; y++ {
+		for x := ex; x < ex+ew; x++ {
+			if tab.ExternalOpenHitTest(x, y, ex, ey, ew, eh) {
+				buttonX, buttonY = x, y
+				break
+			}
+		}
+	}
+	if buttonX < 0 {
+		t.Fatal("external action has no clickable cell")
+	}
+
+	a.handleMouse(tcell.NewEventMouse(ex, ey, tcell.Button1, tcell.ModNone))
+	a.handleMouse(tcell.NewEventMouse(ex, ey, tcell.ButtonNone, tcell.ModNone))
+	assertDefaultAppNotOpened(t, opened)
+	a.handleMouse(tcell.NewEventMouse(buttonX, buttonY, tcell.Button1, tcell.ModNone))
+	a.handleMouse(tcell.NewEventMouse(buttonX, buttonY, tcell.ButtonNone, tcell.ModNone))
 	select {
 	case got := <-opened:
 		if got != target {
 			t.Fatalf("opened path = %q, want %q", got, target)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("opener did not run after confirmation")
+		t.Fatal("external editor action did not invoke opener")
 	}
 	a.handleEvent(waitForDefaultOpenDone(t, a))
-	if len(a.tabs) != 0 || a.activeTabPtr() != nil {
-		t.Fatalf("confirm Yes created a tab: count=%d active=%#v", len(a.tabs), a.activeTabPtr())
-	}
 }
 
 // TestSidebarClick_CopiesSelectedPath verifies explicit tree clicks publish
 // every selected node, including a repeated row and an unsupported file before
-// its confirmation can open.
+// its shared tab becomes active.
 func TestSidebarClick_CopiesSelectedPath(t *testing.T) {
 	dir := t.TempDir()
 	folder := filepath.Join(dir, "docs")
@@ -161,8 +229,8 @@ func TestSidebarClick_CopiesSelectedPath(t *testing.T) {
 	if got := *copied; strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("tree copies = %#v, want %#v", got, want)
 	}
-	if !a.confirmOpen || len(a.tabs) != 1 {
-		t.Fatalf("unsupported click confirm/tabs = %v/%d", a.confirmOpen, len(a.tabs))
+	if a.confirmOpen || len(a.tabs) != 2 || !a.activeTabPtr().IsExternal() {
+		t.Fatalf("unsupported click confirm/tabs/external = %v/%d/%v", a.confirmOpen, len(a.tabs), a.activeTabPtr().IsExternal())
 	}
 }
 
@@ -188,9 +256,9 @@ func TestTreeContextClick_CopiesSelectedPath(t *testing.T) {
 	}
 }
 
-// TestSidebarClick_ExternalCancelAndRepeat keeps the current text tab active
-// after No and requires a fresh confirmation on every later tree click.
-func TestSidebarClick_ExternalCancelAndRepeat(t *testing.T) {
+// TestSidebarClick_ExternalRepeatReusesTab keeps the text tab in place and
+// reactivates the same external tab on every later tree click.
+func TestSidebarClick_ExternalRepeatReusesTab(t *testing.T) {
 	dir := t.TempDir()
 	textPath := filepath.Join(dir, "notes.txt")
 	if err := os.WriteFile(textPath, []byte("hello"), 0o644); err != nil {
@@ -210,29 +278,26 @@ func TestSidebarClick_ExternalCancelAndRepeat(t *testing.T) {
 	original := a.activeTabPtr()
 
 	clickTreePath(t, a, target)
-	a.confirmCancel()
-	if a.confirmOpen {
-		t.Fatal("confirmation remained open after cancel")
-	}
-	if len(a.tabs) != 1 || a.activeTabPtr() != original {
-		t.Fatalf("cancel changed tabs: count=%d active=%#v want=%#v", len(a.tabs), a.activeTabPtr(), original)
+	external := a.activeTabPtr()
+	if a.confirmOpen || len(a.tabs) != 2 || external == original || !external.IsExternal() {
+		t.Fatalf("first external click: confirm=%v count=%d active=%#v", a.confirmOpen, len(a.tabs), external)
 	}
 	if a.tree.SelectedPath != target {
-		t.Fatalf("cancelled external selection = %q, want %q", a.tree.SelectedPath, target)
+		t.Fatalf("external selection = %q, want %q", a.tree.SelectedPath, target)
 	}
 	assertDefaultAppNotOpened(t, opened)
 
+	a.activeTab = 0
 	clickTreePath(t, a, target)
-	if !a.confirmOpen || len(a.tabs) != 1 || a.activeTabPtr() != original {
-		t.Fatalf("repeat changed editor state: confirm=%v tabs=%d active=%#v", a.confirmOpen, len(a.tabs), a.activeTabPtr())
+	if a.confirmOpen || len(a.tabs) != 2 || a.activeTabPtr() != external {
+		t.Fatalf("repeat did not reuse external tab: confirm=%v tabs=%d active=%#v", a.confirmOpen, len(a.tabs), a.activeTabPtr())
 	}
-	a.confirmCancel()
 	assertDefaultAppNotOpened(t, opened)
 }
 
-// TestDoRenameFolder_PreservesCancelledExternalSelection verifies a selected
-// unsupported file follows a parent-folder rename even though it has no tab.
-func TestDoRenameFolder_PreservesCancelledExternalSelection(t *testing.T) {
+// TestDoRenameFolder_PreservesExternalSelection verifies a selected external
+// tab and its tree selection follow a parent-folder rename together.
+func TestDoRenameFolder_PreservesExternalSelection(t *testing.T) {
 	dir := t.TempDir()
 	oldDir := filepath.Join(dir, "old")
 	if err := os.Mkdir(oldDir, 0o755); err != nil {
@@ -246,12 +311,11 @@ func TestDoRenameFolder_PreservesCancelledExternalSelection(t *testing.T) {
 
 	clickTreePath(t, a, oldDir)
 	clickTreePath(t, a, target)
-	if !a.confirmOpen || a.tree.SelectedPath != target || a.activeFolder != oldDir {
+	if a.confirmOpen || a.tree.SelectedPath != target || a.activeFolder != oldDir {
 		t.Fatalf("external click state: confirm=%v selected=%q folder=%q", a.confirmOpen, a.tree.SelectedPath, a.activeFolder)
 	}
-	a.confirmCancel()
-	if len(a.tabs) != 0 {
-		t.Fatalf("cancelled external file opened %d tabs", len(a.tabs))
+	if len(a.tabs) != 1 || !a.activeTabPtr().IsExternal() {
+		t.Fatalf("external tabs=%d active=%#v", len(a.tabs), a.activeTabPtr())
 	}
 
 	a.doRenameFolder(oldDir, "new")
@@ -262,6 +326,9 @@ func TestDoRenameFolder_PreservesCancelledExternalSelection(t *testing.T) {
 	}
 	if a.tree.SelectedPath != want {
 		t.Fatalf("SelectedPath = %q, want %q", a.tree.SelectedPath, want)
+	}
+	if a.activeTabPtr().Path != want {
+		t.Fatalf("external tab path = %q, want %q", a.activeTabPtr().Path, want)
 	}
 }
 
@@ -349,9 +416,9 @@ func TestSidebarClick_TextAndImageOpenTabs(t *testing.T) {
 	assertDefaultAppNotOpened(t, opened)
 }
 
-// TestSidebarClick_ExistingExternalTabIsNotActivated keeps tree confirmation
-// from switching to a placeholder created by a non-tree entry point.
-func TestSidebarClick_ExistingExternalTabIsNotActivated(t *testing.T) {
+// TestSidebarClick_ExistingExternalTabIsActivated verifies a tree click reuses
+// a tab created by a non-tree entry point without launching the opener again.
+func TestSidebarClick_ExistingExternalTabIsActivated(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "manual.pdf")
 	if err := os.WriteFile(target, []byte("%PDF-1.7"), 0o644); err != nil {
@@ -373,15 +440,15 @@ func TestSidebarClick_ExistingExternalTabIsNotActivated(t *testing.T) {
 		t.Fatalf("initial opened path = %q, want %q", got, target)
 	}
 	a.handleEvent(waitForDefaultOpenDone(t, a))
+	external := a.activeTabPtr()
 	a.openFile(textPath)
-	original := a.activeTabPtr()
 
 	clickTreePath(t, a, target)
-	if !a.confirmOpen {
-		t.Fatal("tree click did not open confirmation")
+	if a.confirmOpen {
+		t.Fatal("tree click opened confirmation")
 	}
-	if len(a.tabs) != 2 || a.activeTabPtr() != original {
-		t.Fatalf("tree click activated external placeholder: tabs=%d active=%#v", len(a.tabs), a.activeTabPtr())
+	if len(a.tabs) != 2 || a.activeTabPtr() != external {
+		t.Fatalf("tree click did not activate external tab: tabs=%d active=%#v", len(a.tabs), a.activeTabPtr())
 	}
 	assertDefaultAppNotOpened(t, opened)
 }
@@ -678,15 +745,19 @@ func TestMenuFileAndFolderEnablement_FollowsSelectedTreeNode(t *testing.T) {
 }
 
 // TestOpenFile_ExternalInvokesOpenerAndReusesTab covers automatic handoff on
-// first open and repeated explicit selection without duplicate tabs.
+// repeated and different explicit selections without duplicate external tabs.
 func TestOpenFile_ExternalInvokesOpenerAndReusesTab(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "manual.pdf")
+	second := filepath.Join(dir, "records.zip")
 	if err := os.WriteFile(target, []byte("%PDF-1.7"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(second, []byte{0, 1, 2}, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	a := newTestApp(t, dir)
-	opened := make(chan string, 2)
+	opened := make(chan string, 3)
 	a.openPath = func(path string) error {
 		opened <- path
 		return nil
@@ -708,6 +779,15 @@ func TestOpenFile_ExternalInvokesOpenerAndReusesTab(t *testing.T) {
 	a.handleEvent(waitForDefaultOpenDone(t, a))
 	if len(a.tabs) != 1 {
 		t.Fatalf("reopening external file created %d tabs", len(a.tabs))
+	}
+
+	a.openFile(second)
+	if got := <-opened; got != second {
+		t.Fatalf("second opened path = %q, want %q", got, second)
+	}
+	a.handleEvent(waitForDefaultOpenDone(t, a))
+	if len(a.tabs) != 1 || a.activeTabPtr().Path != second {
+		t.Fatalf("different external file tabs=%d path=%q", len(a.tabs), a.activeTabPtr().Path)
 	}
 }
 

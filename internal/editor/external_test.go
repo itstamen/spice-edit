@@ -66,9 +66,9 @@ func TestNewTab_CorruptImageFallsBackToExternal(t *testing.T) {
 	}
 }
 
-// TestRenderExternal_DisplaysExactMessage checks the user-facing placeholder
-// with a simulation screen so punctuation and Chinese text stay exact.
-func TestRenderExternal_DisplaysExactMessage(t *testing.T) {
+// TestRenderExternal_DisplaysFileAndAction checks the external-file surface
+// names the selected file and exposes the explicit desktop-app action.
+func TestRenderExternal_DisplaysFileAndAction(t *testing.T) {
 	scr := newSimScreen(t, 70, 7)
 	defer scr.Fini()
 
@@ -89,7 +89,36 @@ func TestRenderExternal_DisplaysExactMessage(t *testing.T) {
 		}
 		rows = append(rows, row.String())
 	}
-	if got := strings.Join(rows, "\n"); !strings.Contains(got, externalMessage) {
-		t.Fatalf("rendered screen does not contain %q:\n%s", externalMessage, got)
+	got := strings.Join(rows, "\n")
+	for _, want := range []string{"manual.pdf", externalOpenButton} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rendered screen does not contain %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestExternalOpenHitTest pins the visible action bounds to the centered
+// layout used by RenderExternal.
+func TestExternalOpenHitTest(t *testing.T) {
+	tab := newExternalTab("/tmp/manual.pdf")
+	x, y, w, h := 10, 4, 40, 9
+	buttonW := len(externalOpenButton)
+	buttonX := x + (w-buttonW)/2
+	buttonY := y + (h-3)/2 + 2
+
+	for _, px := range []int{buttonX, buttonX + buttonW/2, buttonX + buttonW - 1} {
+		if !tab.ExternalOpenHitTest(px, buttonY, x, y, w, h) {
+			t.Errorf("button cell (%d,%d) did not hit", px, buttonY)
+		}
+	}
+	for _, point := range [][2]int{
+		{buttonX - 1, buttonY},
+		{buttonX + buttonW, buttonY},
+		{buttonX, buttonY - 2},
+		{x - 1, buttonY},
+	} {
+		if tab.ExternalOpenHitTest(point[0], point[1], x, y, w, h) {
+			t.Errorf("non-button cell (%d,%d) hit", point[0], point[1])
+		}
 	}
 }

@@ -2036,7 +2036,7 @@ func (a *App) sidebarClick(x, y int) {
 		return
 	}
 	a.setActiveFolder(filepath.Dir(n.Path))
-	a.openFileWithExternalPolicy(n.Path, externalOpenConfirmWithoutTab)
+	a.openFileWithExternalPolicy(n.Path, externalOpenDisplayOnly)
 }
 
 // setActiveFolder records path as the editor's current working folder and
@@ -2097,10 +2097,19 @@ func (a *App) syncActiveTreeFile() {
 // the press landed on editable text so callers can start a drag only then.
 func (a *App) editorPress(x, y int) bool {
 	tab := a.activeTabPtr()
-	if tab == nil || tab.IsReadOnly() {
+	if tab == nil {
 		return false
 	}
 	ex, ey, ew, eh := a.editorRect()
+	if tab.IsExternal() {
+		if tab.ExternalOpenHitTest(x, y, ex, ey, ew, eh) {
+			a.openPathWithDefaultApp(tab.Path)
+		}
+		return false
+	}
+	if tab.IsReadOnly() {
+		return false
+	}
 	localX := x - ex
 	localY := y - ey
 	if a.openGitHunkAt(tab, localX, localY, ew, eh) {
@@ -2348,13 +2357,13 @@ func (a *App) flash(msg string) {
 	a.statusUntil = time.Now().Add(statusFlashFor)
 }
 
-// externalOpenPolicy controls whether an external file gets a placeholder tab
-// and launches immediately or leaves the current tab active while confirming.
+// externalOpenPolicy controls whether displaying an external file also hands
+// it to the host default application.
 type externalOpenPolicy uint8
 
 const (
 	externalOpenImmediate externalOpenPolicy = iota
-	externalOpenConfirmWithoutTab
+	externalOpenDisplayOnly
 )
 
 // OpenFile opens the file at path in a new tab — or switches to it if
@@ -2372,8 +2381,8 @@ func (a *App) openFile(path string) {
 	a.openFileWithExternalPolicy(path, externalOpenImmediate)
 }
 
-// openFileWithExternalPolicy shares classification and inline tab handling
-// while letting callers keep external files out of the tab bar.
+// openFileWithExternalPolicy shares classification and tab handling while
+// letting tree clicks display external files without launching another app.
 func (a *App) openFileWithExternalPolicy(path string, policy externalOpenPolicy) {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
@@ -2400,10 +2409,6 @@ func (a *App) openFileWithExternalPolicy(path string, policy externalOpenPolicy)
 		if t.Path != path {
 			continue
 		}
-		if t.IsExternal() && policy == externalOpenConfirmWithoutTab {
-			a.handleExternalFileOpen(t.Path, policy)
-			return
-		}
 		a.activeTab = i
 		if t.IsExternal() {
 			a.handleExternalFileOpen(t.Path, policy)
@@ -2419,7 +2424,8 @@ func (a *App) openFileWithExternalPolicy(path string, policy externalOpenPolicy)
 		a.flash(fmt.Sprintf("Error: %v", err))
 		return
 	}
-	if t.IsExternal() && policy == externalOpenConfirmWithoutTab {
+	if t.IsExternal() {
+		a.displayExternalTab(t)
 		a.handleExternalFileOpen(t.Path, policy)
 		return
 	}
@@ -2428,23 +2434,26 @@ func (a *App) openFileWithExternalPolicy(path string, policy externalOpenPolicy)
 	if !t.IsReadOnly() {
 		t.GitLines = loadGitLineChanges(a.rootDir, t.Path)
 	}
-	if t.IsExternal() {
-		a.handleExternalFileOpen(t.Path, policy)
-		return
-	}
 	a.flash(fmt.Sprintf("Opened %s", filepath.Base(path)))
 }
 
-// handleExternalFileOpen applies the caller's launch policy after the
-// external path has been classified. Tree confirmation does not require a tab.
+// displayExternalTab replaces the one shared external tab in place, or appends
+// it when no unsupported file is currently represented in the tab bar.
+func (a *App) displayExternalTab(tab *editor.Tab) {
+	for i, existing := range a.tabs {
+		if existing.IsExternal() {
+			a.tabs[i] = tab
+			a.activeTab = i
+			return
+		}
+	}
+	a.tabs = append(a.tabs, tab)
+	a.activeTab = len(a.tabs) - 1
+}
+
+// handleExternalFileOpen launches only for deliberate non-tree open flows.
 func (a *App) handleExternalFileOpen(path string, policy externalOpenPolicy) {
-	if policy == externalOpenConfirmWithoutTab {
-		name := filepath.Base(path)
-		a.openConfirm(
-			"Open with default app?",
-			fmt.Sprintf("Open %s with the system default application?", name),
-			func(app *App) { app.openPathWithDefaultApp(path) },
-		)
+	if policy == externalOpenDisplayOnly {
 		return
 	}
 	a.openPathWithDefaultApp(path)

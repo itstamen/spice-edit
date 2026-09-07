@@ -245,18 +245,19 @@ SpiceEdit edits UTF-8 text files and previews PNG, JPEG, and the first
 frame of GIF images inside the terminal. From the left file tree, text files
 open editable tabs and supported images open preview tabs. Clicking a PDF,
 office document, archive, database, media file, executable, or other
-unsupported file keeps the current editor tab unchanged and asks whether to
-launch the system default application. Choosing No closes the prompt without
-creating a tab or launching another application.
+unsupported file opens one shared read-only tab. Selecting another unsupported
+file reuses that tab and updates it to show the newly selected filename. Choose
+**Open with default app** inside the editor surface to hand that file to the
+host operating system; selecting the file alone never launches another app.
 
 The file tree keeps one exact clicked-node selection, shown in bold yellow.
 Right-clicking an unsupported file offers **Open with default app**,
 **Rename file**, **Delete file**, **Copy relative path**, and **Copy absolute
 path**. File actions in both the tree context menu and the `Esc Esc` main
 menu act on that exact selected file directly; opening it with the default app
-does not create or switch an editor tab. **Copy relative path** and **Copy
-absolute path** also apply to the exact selected file or folder, including the
-project root.
+does not create or switch an additional editor tab. **Copy relative path** and
+**Copy absolute path** also apply to the exact selected file or folder,
+including the project root.
 
 Press `Esc o` or choose **Open with default app** from the `≡` menu to hand
 the selected tree file, or an active file-backed tab when no tree node is
