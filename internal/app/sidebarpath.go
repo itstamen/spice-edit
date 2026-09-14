@@ -9,7 +9,9 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,10 +61,60 @@ func (a *App) currentSidebarPath() (string, bool) {
 	if prefix == "" {
 		return value, true
 	}
+	if a.sidebarPathType == sidebarPathRelative && prefix == "./" {
+		return value, true
+	}
 	if !strings.HasPrefix(value, prefix) {
 		return value, false
 	}
 	return strings.TrimPrefix(value, prefix), true
+}
+
+// currentSidebarFolderPrefix returns the selected node's folder rendered in
+// the active path mode. Files contribute their parent; directories contribute
+// themselves. A non-empty prefix always ends in a normalized slash.
+func (a *App) currentSidebarFolderPrefix() (string, bool) {
+	if a.tree == nil || a.tree.SelectedPath == "" {
+		return "", false
+	}
+	target := a.tree.SelectedPath
+	info, err := os.Stat(target)
+	if err != nil {
+		return "", false
+	}
+	folder := target
+	if !info.IsDir() {
+		folder = filepath.Dir(target)
+	}
+
+	value := a.relativePathFor(folder)
+	if a.sidebarPathType == sidebarPathAbsolute {
+		value = absolutePathFor(folder)
+	}
+	value = normalizeSidebarPathValue(value, filepath.Separator)
+	if value == "." {
+		return "./", true
+	}
+	return strings.TrimSuffix(value, "/") + "/", true
+}
+
+// toggleCurrentSidebarPrefix switches between no prefix and the selected
+// node's folder, then republishes the newly displayed path to the clipboard.
+func (a *App) toggleCurrentSidebarPrefix() {
+	if len(a.sidebarPathPrefix) > 0 {
+		a.sidebarPathPrefix = nil
+	} else {
+		prefix, ok := a.currentSidebarFolderPrefix()
+		if !ok {
+			a.flash("No path selected")
+			return
+		}
+		a.sidebarPathPrefix = []rune(prefix)
+	}
+	a.sidebarPathPrefixCursor = len(a.sidebarPathPrefix)
+	a.sidebarPathPrefixScroll = 0
+	a.sidebarPathPrefixFocused = false
+	a.copyCurrentSidebarPath(false)
 }
 
 // copyCurrentSidebarPath publishes the tree selection's displayed path after
@@ -70,19 +122,23 @@ func (a *App) currentSidebarPath() (string, bool) {
 // status success message alone so path browsing does not disturb text editing.
 func (a *App) copyCurrentSidebarPath(force bool) {
 	value, _ := a.currentSidebarPath()
+	clipboardValue := value
+	if a.sidebarPathQuoted {
+		clipboardValue = strconv.Quote(value)
+	}
 	if a.tree == nil || a.tree.SelectedPath == "" ||
-		(!force && a.sidebarPathHasCopied && value == a.sidebarPathLastCopied) {
+		(!force && a.sidebarPathHasCopied && clipboardValue == a.sidebarPathLastCopied) {
 		return
 	}
 	copyToSystem := a.copyToSystem
 	if copyToSystem == nil {
 		copyToSystem = clipboard.CopyToSystem
 	}
-	if err := copyToSystem(value); err != nil {
+	if err := copyToSystem(clipboardValue); err != nil {
 		a.flash(fmt.Sprintf("Copy failed: %v", err))
 		return
 	}
-	a.sidebarPathLastCopied = value
+	a.sidebarPathLastCopied = clipboardValue
 	a.sidebarPathHasCopied = true
 }
 
@@ -92,9 +148,9 @@ func (a *App) sidebarPathInputRect() (x, y, w int) {
 	if panelW <= 0 || panelH < sidebarPathExpandedHeight {
 		return 0, 0, 0
 	}
-	relative, absolute := "( ) Relative", "( ) Absolute"
-	radioWidth := termtext.StringWidth(relative) + 2 + termtext.StringWidth(absolute)
-	if radioWidth <= panelW-1 {
+	relative, quoted := sidebarPathOptionLabels(a.sidebarPathType == sidebarPathRelative, a.sidebarPathQuoted)
+	optionWidth := termtext.StringWidth(relative) + 2 + termtext.StringWidth(quoted)
+	if optionWidth <= panelW-1 {
 		return x + 1, y + 4, panelW - 2
 	}
 	prefixLabel := "Strip prefix"
@@ -130,28 +186,28 @@ func (a *App) handleSidebarPathMouse(x, y int) bool {
 		return true
 	}
 
-	relative, absolute := "( ) Relative", "( ) Absolute"
-	radioWidth := termtext.StringWidth(relative) + 2 + termtext.StringWidth(absolute)
+	relative, quoted := sidebarPathOptionLabels(a.sidebarPathType == sidebarPathRelative, a.sidebarPathQuoted)
+	optionWidth := termtext.StringWidth(relative) + 2 + termtext.StringWidth(quoted)
 	changed := false
-	if radioWidth <= panelW-1 && y == panelY+2 {
+	if optionWidth <= panelW-1 && y == panelY+2 {
 		relativeX := panelX + 1
-		absoluteX := relativeX + termtext.StringWidth(relative) + 2
+		quotedX := relativeX + termtext.StringWidth(relative) + 2
 		switch {
 		case x >= relativeX && x < relativeX+termtext.StringWidth(relative):
-			changed = a.sidebarPathType != sidebarPathRelative
-			a.sidebarPathType = sidebarPathRelative
-		case x >= absoluteX && x < absoluteX+termtext.StringWidth(absolute):
-			changed = a.sidebarPathType != sidebarPathAbsolute
-			a.sidebarPathType = sidebarPathAbsolute
+			a.sidebarPathType = toggleSidebarPathType(a.sidebarPathType)
+			changed = true
+		case x >= quotedX && x < quotedX+termtext.StringWidth(quoted):
+			a.sidebarPathQuoted = !a.sidebarPathQuoted
+			changed = true
 		}
-	} else if radioWidth > panelW-1 {
+	} else if optionWidth > panelW-1 {
 		switch y {
 		case panelY + 2:
-			changed = a.sidebarPathType != sidebarPathRelative
-			a.sidebarPathType = sidebarPathRelative
+			a.sidebarPathType = toggleSidebarPathType(a.sidebarPathType)
+			changed = true
 		case panelY + 3:
-			changed = a.sidebarPathType != sidebarPathAbsolute
-			a.sidebarPathType = sidebarPathAbsolute
+			a.sidebarPathQuoted = !a.sidebarPathQuoted
+			changed = true
 		}
 	}
 	if changed {
@@ -256,15 +312,14 @@ func (a *App) drawSidebarPath() {
 	if a.sidebarPathCollapsed {
 		return
 	}
-	drawAtWidth(a.screen, x+1, y+1, w-1, "Path type", labelStyle)
-	relative, absolute := "( ) Relative", "( ) Absolute"
-	relativeStyle, absoluteStyle := valueStyle, valueStyle
-	if a.sidebarPathType == sidebarPathAbsolute {
-		absolute = "(x) Absolute"
-		absoluteStyle = selectedStyle
-	} else {
-		relative = "(x) Relative"
+	drawAtWidth(a.screen, x+1, y+1, w-1, "Path setting", labelStyle)
+	relative, quoted := sidebarPathOptionLabels(a.sidebarPathType == sidebarPathRelative, a.sidebarPathQuoted)
+	relativeStyle, quotedStyle := valueStyle, valueStyle
+	if a.sidebarPathType == sidebarPathRelative {
 		relativeStyle = selectedStyle
+	}
+	if a.sidebarPathQuoted {
+		quotedStyle = selectedStyle
 	}
 
 	value, prefixValid := a.currentSidebarPath()
@@ -284,11 +339,11 @@ func (a *App) drawSidebarPath() {
 			a.sidebarPathPrefixFocused)
 	}
 
-	radioWidth := termtext.StringWidth(relative) + 2 + termtext.StringWidth(absolute)
-	if radioWidth <= w-1 {
+	optionWidth := termtext.StringWidth(relative) + 2 + termtext.StringWidth(quoted)
+	if optionWidth <= w-1 {
 		drawAtWidth(a.screen, x+1, y+2, w-1, relative, relativeStyle)
 		drawAtWidth(a.screen, x+1+termtext.StringWidth(relative)+2, y+2,
-			w-1-termtext.StringWidth(relative)-2, absolute, absoluteStyle)
+			w-1-termtext.StringWidth(relative)-2, quoted, quotedStyle)
 		drawAtWidth(a.screen, x+1, y+3, w-1, "Strip prefix", labelStyle)
 		drawInput(x+1, y+4, w-2)
 	} else {
@@ -296,7 +351,7 @@ func (a *App) drawSidebarPath() {
 		// path choices whole by stacking them, then share the prefix label row
 		// with its input so the panel remains exactly eight rows tall.
 		drawAtWidth(a.screen, x+1, y+2, w-1, relative, relativeStyle)
-		drawAtWidth(a.screen, x+1, y+3, w-1, absolute, absoluteStyle)
+		drawAtWidth(a.screen, x+1, y+3, w-1, quoted, quotedStyle)
 		prefixLabel := "Strip prefix"
 		drawAtWidth(a.screen, x, y+4, w, prefixLabel, labelStyle)
 		drawInput(x+termtext.StringWidth(prefixLabel)+1, y+4, w-termtext.StringWidth(prefixLabel)-1)
@@ -304,6 +359,29 @@ func (a *App) drawSidebarPath() {
 
 	drawAtWidth(a.screen, x+1, y+5, w-1, "Current path", labelStyle)
 	drawSidebarPathTail(a.screen, x+1, y+6, w-2, value, valueStyle)
+}
+
+// sidebarPathOptionLabels returns the exact checkbox copy used by both
+// rendering and mouse hit-testing so their terminal-cell geometry cannot drift.
+func sidebarPathOptionLabels(relative, quoted bool) (string, string) {
+	relativeMark := "☐"
+	if relative {
+		relativeMark = "☑"
+	}
+	quotedMark := "☐"
+	if quoted {
+		quotedMark = "☑"
+	}
+	return relativeMark + " Relative", quotedMark + " quoted"
+}
+
+// toggleSidebarPathType maps the single Relative checkbox to the two path
+// modes: checked means project-relative and unchecked means absolute.
+func toggleSidebarPathType(current sidebarPathType) sidebarPathType {
+	if current == sidebarPathRelative {
+		return sidebarPathAbsolute
+	}
+	return sidebarPathRelative
 }
 
 // drawSidebarPathTail writes the last two terminal rows of value. It walks

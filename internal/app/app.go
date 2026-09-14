@@ -166,6 +166,13 @@ type clickRecord struct {
 	when time.Time
 }
 
+// treeClickRecord tracks node identity instead of screen coordinates because
+// expanding a directory can move rows between the first and second click.
+type treeClickRecord struct {
+	path string
+	when time.Time
+}
+
 // menuItemDef describes one row in the action modal: the label shown to
 // the user, the y-offset it lives at inside the modal, the action it runs
 // when clicked, and a predicate that returns true when the action is
@@ -403,6 +410,7 @@ type App struct {
 	spiceConfigPath          string
 	sidebarPathCollapsed     bool
 	sidebarPathType          sidebarPathType
+	sidebarPathQuoted        bool
 	sidebarPathPrefix        []rune
 	sidebarPathPrefixCursor  int
 	sidebarPathPrefixScroll  int
@@ -410,21 +418,23 @@ type App struct {
 	sidebarPathLastCopied    string
 	sidebarPathHasCopied     bool
 
-	clipBuf            string
-	copyToSystem       func(string) error
-	readFromSystem     func() (string, error)
-	commandPasteRecent func(time.Time) bool
-	closeCommandPaste  func()
-	pasting            bool
-	pasteAuthorized    bool
-	pasteBuf           strings.Builder
-	statusMsg          string
-	statusUntil        time.Time
-	openPath           pathOpener
-	revealPath         pathRevealer
-	dragMode           string // "editor", "sidebar", "tree", or "path" while a mouse press is held.
-	lastClick          clickRecord
-	lastTabRects       []tabRect
+	clipBuf             string
+	copyToSystem        func(string) error
+	readFromSystem      func() (string, error)
+	commandPasteRecent  func(time.Time) bool
+	closeCommandPaste   func()
+	pasting             bool
+	pasteAuthorized     bool
+	pasteBuf            strings.Builder
+	statusMsg           string
+	statusUntil         time.Time
+	openPath            pathOpener
+	revealPath          pathRevealer
+	dragMode            string // "editor", "sidebar", "tree", "path", or "status" while a mouse press is held.
+	statusButtonPressed int    // one-based status button index while its mouse press is held; zero means none.
+	lastClick           clickRecord
+	lastTreeClick       treeClickRecord
+	lastTabRects        []tabRect
 
 	// lastShiftAt is the wall-clock time we last saw any mouse event
 	// carrying the Shift modifier. Some terminals (notably Zellij over
@@ -1754,12 +1764,16 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	if leftDown && a.dragMode == "path" {
 		return
 	}
+	if leftDown && a.dragMode == "status" {
+		return
+	}
 
 	// Right-click handling. File-tree rows and rendered tabs get focused
 	// context menus; everywhere else falls through to the main action menu.
 	// Note: macOS Terminal + tmux often swallows Button3, which is why core
 	// actions also live in the main ≡ menu.
 	if btn&tcell.Button3 != 0 {
+		a.lastTreeClick = treeClickRecord{}
 		if a.sidebarPathContains(x, y) {
 			a.sidebarPathPrefixFocused = false
 			return
@@ -1836,7 +1850,14 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 
 	// Initial press dispatch.
 	if leftDown && a.dragMode == "" {
+		if button := a.statusBarButtonAt(x, y); button >= 0 {
+			a.lastTreeClick = treeClickRecord{}
+			a.dragMode = "status"
+			a.statusButtonPressed = button + 1
+			return
+		}
 		if a.handleSidebarPathMouse(x, y) {
+			a.lastTreeClick = treeClickRecord{}
 			a.dragMode = "path"
 			return
 		}
@@ -1846,16 +1867,21 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		treeX, treeY, treeW, treeH := a.sidebarRect()
 		switch {
 		case splitX >= 0 && x == splitX:
+			a.lastTreeClick = treeClickRecord{}
 			a.dragMode = "sidebar"
 		case sw > 0 && pointInRect(x, y, treeX, treeY, treeW, treeH):
 			a.dragMode = "tree"
 			a.sidebarClick(x, y)
 		case y == 0:
+			a.lastTreeClick = treeClickRecord{}
 			a.tabBarClick(x, y)
 		case y > 0 && y < a.height-1:
+			a.lastTreeClick = treeClickRecord{}
 			if a.editorPress(x, y) {
 				a.dragMode = "editor"
 			}
+		default:
+			a.lastTreeClick = treeClickRecord{}
 		}
 		return
 	}
@@ -1863,10 +1889,14 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	// Button released — exit any drag mode we were in. Preserve the prior
 	// mode long enough to publish a completed editor selection exactly once.
 	completedDragMode := a.dragMode
+	pressedStatusButton := a.statusButtonPressed
 	a.dragMode = ""
+	a.statusButtonPressed = 0
 	a.stopAutoScroll()
 	if completedDragMode == "editor" {
 		a.autoCopyMouseSelection()
+	} else if completedDragMode == "status" {
+		a.activateStatusBarButton(x, y, pressedStatusButton)
 	}
 }
 
@@ -2022,20 +2052,40 @@ func (a *App) sidebarClick(x, y int) {
 	if !ok {
 		return
 	}
+	now := time.Now()
+	elapsed := now.Sub(a.lastTreeClick.when)
+	doubleClick := a.lastTreeClick.path == n.Path && !a.lastTreeClick.when.IsZero() &&
+		elapsed >= 0 && elapsed < doubleClickMs
+	if doubleClick {
+		a.lastTreeClick = treeClickRecord{}
+	} else {
+		a.lastTreeClick = treeClickRecord{path: n.Path, when: now}
+	}
 	if n == a.tree.Root {
 		a.tree.SelectedPath = n.Path
 		a.copyCurrentSidebarPath(true)
 		a.setActiveFolder(a.rootDir)
+		if doubleClick {
+			a.menuShowInFileManager()
+		}
 		return
 	}
 	a.tree.SelectedPath = n.Path
 	a.copyCurrentSidebarPath(true)
 	if n.IsDir {
 		a.setActiveFolder(n.Path)
+		if doubleClick {
+			a.menuShowInFileManager()
+			return
+		}
 		a.tree.Toggle(n)
 		return
 	}
 	a.setActiveFolder(filepath.Dir(n.Path))
+	if doubleClick {
+		a.menuOpenWithDefaultApp()
+		return
+	}
 	a.openFileWithExternalPolicy(n.Path, externalOpenDisplayOnly)
 }
 
@@ -3750,20 +3800,7 @@ func (a *App) drawStatusBar() {
 		a.screen.SetContent(cx, sy, ' ', nil, style)
 	}
 
-	// Right-side text: current git branch when we're inside a repo. Drawn
-	// first so the left-side text can be clipped against it and the two
-	// pieces never overlap on a narrow window.
-	var rightWidth int
-	if a.gitBranch != "" {
-		right := " " + a.gitBranch + " "
-		rw := termtext.StringWidth(right)
-		if rw < sw {
-			drawAt(a.screen, sx+sw-rw, sy, right, style)
-			rightWidth = rw
-		}
-	}
-
-	// Left-side text: status flash, file info, or root dir.
+	// Left-side text: branch first, then status flash, file info, or root dir.
 	var left string
 	if time.Now().Before(a.statusUntil) && a.statusMsg != "" {
 		left = " " + a.statusMsg
@@ -3786,16 +3823,20 @@ func (a *App) drawStatusBar() {
 	} else {
 		left = " " + filepath.Base(a.rootDir)
 	}
-	// One cell of breathing room between left and right text so they
-	// don't visually butt up against each other on a tight terminal.
-	leftMax := sw - rightWidth
-	if rightWidth > 0 {
-		leftMax--
+	if a.gitBranch != "" {
+		left = "[" + a.gitBranch + "]" + left
+	}
+
+	buttons := a.statusBarButtons()
+	leftMax := sw
+	if len(buttons) > 0 {
+		leftMax = buttons[0].X - sx - 1
 	}
 	if leftMax < 0 {
 		leftMax = 0
 	}
 	drawStatusText(a.screen, sx, sy, leftMax, left, style)
+	a.drawStatusBarButtons(buttons)
 }
 
 // drawTooSmall paints a centred error message when the terminal window is

@@ -52,6 +52,10 @@ The goals, in order:
   scroll wheel scrolls, double-click selects a word, drag past the edge
   to auto-scroll a selection. Completed mouse selections automatically copy
   to the system clipboard.
+- **Tree double-click actions** — double-click a folder to open it in Finder,
+  Explorer, or the platform file manager; double-click a file to open it with
+  the operating system's default application. A single click keeps the normal
+  tree behavior.
 - **Syntax highlighting** for dozens of languages via Chroma, with cached
   rendering that keeps large-file navigation responsive. Markdown prose uses
   the primary text color; fenced code blocks use their declared language (for
@@ -192,14 +196,23 @@ Then:
   ```
 - Drag the splitter between the sidebar and editor to resize.
 - The compact **PATH INFO** panel below the tree follows the exact node clicked
-  with either mouse button. **Relative** (the default) copies a path rooted at
-  the opened project directory; **Absolute** copies the full filesystem path.
-  **Strip prefix** removes a matching literal prefix from **Current path**. An
-  invalid prefix turns red and leaves the unstripped path intact. Selecting a
-  node or changing either control automatically copies the full current value
-  to the system clipboard, even when the sidebar shortens its on-screen display.
+  with either mouse button. **Relative** is enabled by default and copies a
+  path rooted at the opened project directory; clearing it uses the full
+  absolute filesystem path. **quoted** adds shell-style double quotes only to
+  the copied clipboard value; the panel never adds quotes to **Current path**
+  or **Strip prefix**. **Strip prefix** removes a matching literal prefix from
+  **Current path**. An invalid prefix turns red and leaves the unstripped path
+  intact. Selecting a node or changing a path control automatically copies the
+  current value to the system clipboard, even when the sidebar shortens its
+  on-screen display.
   Its `▲`/`▼` header control collapses or expands the panel. It starts expanded,
   and SpiceEdit remembers the choice in `config.json`.
+- The status bar starts with the current Git branch and includes `Open..`,
+  `Finder`/`Explorer`, `Prefix`, and `Menu` actions on the right. `Open..`,
+  the file-manager action, and `Menu` mirror `Esc o`, `Esc e`, and `Esc Esc`.
+  `Prefix` toggles **Strip prefix** between empty and the selected node's
+  containing folder (or the selected folder itself), using the active relative
+  or absolute path mode.
 - Click and drag in the editor to select; drag past the top or bottom
   edge to auto-scroll the selection.
 
@@ -243,12 +256,13 @@ the hotkeys are just a faster path for the actions you reach for most.
 
 SpiceEdit edits UTF-8 text files and previews PNG, JPEG, and the first
 frame of GIF images inside the terminal. From the left file tree, text files
-open editable tabs and supported images open preview tabs. Clicking a PDF,
-office document, archive, database, media file, executable, or other
-unsupported file opens one shared read-only tab. Selecting another unsupported
-file reuses that tab and updates it to show the newly selected filename. Choose
-**Open with default app** inside the editor surface to hand that file to the
-host operating system; selecting the file alone never launches another app.
+open editable tabs and supported images open preview tabs on a single click.
+Clicking a PDF, office document, archive, database, media file, executable,
+or other unsupported file opens one shared read-only tab. Selecting another
+unsupported file reuses that tab and updates it to show the newly selected
+filename. Double-click any file in the tree to hand it to the host operating
+system's default application; selecting it once only changes the editor
+selection/tab.
 
 The file tree keeps one exact clicked-node selection, shown in bold yellow.
 Right-clicking an unsupported file offers **Open with default app**,

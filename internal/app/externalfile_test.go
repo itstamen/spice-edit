@@ -222,6 +222,7 @@ func TestSidebarClick_CopiesSelectedPath(t *testing.T) {
 	clickTreePath(t, a, dir)
 	clickTreePath(t, a, folder)
 	clickTreePath(t, a, textPath)
+	a.lastTreeClick = treeClickRecord{} // exercise a later single click, not the double-click feature.
 	clickTreePath(t, a, textPath)
 	clickTreePath(t, a, externalPath)
 
@@ -232,6 +233,88 @@ func TestSidebarClick_CopiesSelectedPath(t *testing.T) {
 	if a.confirmOpen || len(a.tabs) != 2 || !a.activeTabPtr().IsExternal() {
 		t.Fatalf("unsupported click confirm/tabs/external = %v/%d/%v", a.confirmOpen, len(a.tabs), a.activeTabPtr().IsExternal())
 	}
+}
+
+// TestTreeDoubleClick_FileOpensWithDefaultApp keeps the first click's editor
+// behavior and maps the second click on the same file to the Esc-o action.
+func TestTreeDoubleClick_FileOpensWithDefaultApp(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(target, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	opened := make(chan string, 1)
+	a.openPath = func(path string) error { opened <- path; return nil }
+
+	clickTreePath(t, a, target)
+	assertDefaultAppNotOpened(t, opened)
+	clickTreePath(t, a, target)
+	select {
+	case got := <-opened:
+		if got != target {
+			t.Fatalf("opened %q, want %q", got, target)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("file double click did not invoke default app")
+	}
+	a.handleEvent(waitForDefaultOpenDone(t, a))
+}
+
+// TestTreeDoubleClick_DirectoryRevealsInFileManager maps the second click to
+// Esc-e without toggling the directory a second time.
+func TestTreeDoubleClick_DirectoryRevealsInFileManager(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "docs")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	revealed := make(chan revealCall, 1)
+	a.revealPath = func(path string, selectFile bool) error {
+		revealed <- revealCall{path: path, selectFile: selectFile}
+		return nil
+	}
+
+	clickTreePath(t, a, folder)
+	select {
+	case got := <-revealed:
+		t.Fatalf("first click revealed %#v", got)
+	default:
+	}
+	clickTreePath(t, a, folder)
+	select {
+	case got := <-revealed:
+		if got.path != folder || got.selectFile {
+			t.Fatalf("reveal = %#v, want folder without selection", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("folder double click did not invoke file manager")
+	}
+	a.handleEvent(waitForRevealDone(t, a))
+}
+
+// TestTreeDoubleClick_RequiresSameRecentNode prevents unrelated tree clicks
+// from being combined into one host action.
+func TestTreeDoubleClick_RequiresSameRecentNode(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.txt")
+	second := filepath.Join(dir, "second.txt")
+	for _, path := range []string{first, second} {
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := newTestApp(t, dir)
+	opened := make(chan string, 1)
+	a.openPath = func(path string) error { opened <- path; return nil }
+
+	clickTreePath(t, a, first)
+	clickTreePath(t, a, second)
+	assertDefaultAppNotOpened(t, opened)
+	a.lastTreeClick.when = time.Now().Add(-2 * doubleClickMs)
+	clickTreePath(t, a, second)
+	assertDefaultAppNotOpened(t, opened)
 }
 
 // TestTreeContextClick_CopiesSelectedPath makes the right-click selection an
@@ -257,7 +340,7 @@ func TestTreeContextClick_CopiesSelectedPath(t *testing.T) {
 }
 
 // TestSidebarClick_ExternalRepeatReusesTab keeps the text tab in place and
-// reactivates the same external tab on every later tree click.
+// reactivates the same external tab on a later non-double tree click.
 func TestSidebarClick_ExternalRepeatReusesTab(t *testing.T) {
 	dir := t.TempDir()
 	textPath := filepath.Join(dir, "notes.txt")
@@ -288,6 +371,7 @@ func TestSidebarClick_ExternalRepeatReusesTab(t *testing.T) {
 	assertDefaultAppNotOpened(t, opened)
 
 	a.activeTab = 0
+	a.lastTreeClick = treeClickRecord{}
 	clickTreePath(t, a, target)
 	if a.confirmOpen || len(a.tabs) != 2 || a.activeTabPtr() != external {
 		t.Fatalf("repeat did not reuse external tab: confirm=%v tabs=%d active=%#v", a.confirmOpen, len(a.tabs), a.activeTabPtr())

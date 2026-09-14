@@ -2476,11 +2476,9 @@ func TestTabBarClick_ClosesViaX(t *testing.T) {
 	}
 }
 
-// TestDrawStatusBar_RendersBranchRightAligned pins down the lower-right
-// branch label: when gitBranch is set, the rightmost cells of the
-// status bar carry " <branch> " in order, so the user can glance at
-// the corner and read which checkout they're on.
-func TestDrawStatusBar_RendersBranchRightAligned(t *testing.T) {
+// TestDrawStatusBar_RendersBranchAtFarLeft pins the branch before document
+// information, leaving the lower-right edge to the action button group.
+func TestDrawStatusBar_RendersBranchAtFarLeft(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.gitBranch = "feat/widgets"
 	a.draw()
@@ -2490,8 +2488,8 @@ func TestDrawStatusBar_RendersBranchRightAligned(t *testing.T) {
 	cells, w, _ := scr.GetContents()
 	_, sy, _, _ := a.statusRect()
 
-	want := []rune(" feat/widgets ")
-	startX := w - len(want)
+	want := []rune("[feat/widgets]")
+	startX := 0
 	for i, r := range want {
 		c := cells[sy*w+startX+i]
 		if len(c.Runes) == 0 || c.Runes[0] != r {
@@ -2502,8 +2500,7 @@ func TestDrawStatusBar_RendersBranchRightAligned(t *testing.T) {
 }
 
 // TestDrawStatusBar_OmitsBranchWhenEmpty confirms a non-repo project
-// (gitBranch == "") doesn't paint a stray label or steal cells from
-// the left-side text — the right edge should just be the bar's bg.
+// (gitBranch == "") doesn't paint a stray label before the left-side text.
 func TestDrawStatusBar_OmitsBranchWhenEmpty(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.gitBranch = ""
@@ -2514,12 +2511,8 @@ func TestDrawStatusBar_OmitsBranchWhenEmpty(t *testing.T) {
 	cells, w, _ := scr.GetContents()
 	_, sy, _, _ := a.statusRect()
 
-	// Tail of the status bar must be blank — the bar's fill character.
-	for x := w - 5; x < w; x++ {
-		c := cells[sy*w+x]
-		if len(c.Runes) > 0 && c.Runes[0] != ' ' {
-			t.Fatalf("status bar col %d = %v, expected blank tail", x, c.Runes)
-		}
+	if c := cells[sy*w]; len(c.Runes) > 0 && c.Runes[0] == '[' {
+		t.Fatalf("empty branch rendered prefix at first cell: %v", c.Runes)
 	}
 }
 
@@ -3291,16 +3284,17 @@ func TestLayoutTabs_CJKNameUsesCellWidth(t *testing.T) {
 	}
 }
 
-// TestDrawStatusBar_CJKBranchRightAligns ensures a wide branch name uses its
-// actual cell width when positioned at the status bar's right edge.
-func TestDrawStatusBar_CJKBranchRightAligns(t *testing.T) {
+// TestDrawStatusBar_CJKBranchUsesCellWidths ensures a wide branch name keeps
+// its terminal cell geometry when positioned at the far left.
+func TestDrawStatusBar_CJKBranchUsesCellWidths(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.gitBranch = "中文"
 	a.drawStatusBar()
 
 	sx, sy, sw, _ := a.statusRect()
-	text, _, width := a.screen.(tcell.SimulationScreen).Get(sx+sw-5, sy)
+	text, _, width := a.screen.(tcell.SimulationScreen).Get(sx+1, sy)
 	if text != "中" || width != 2 {
-		t.Fatalf("right-aligned branch cell = (%q, %d), want (中, 2)", text, width)
+		t.Fatalf("left-aligned branch cell = (%q, %d), want (中, 2)", text, width)
 	}
+	_ = sw
 }

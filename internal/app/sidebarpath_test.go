@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +118,29 @@ func TestSidebarPathCopy_EventScoped(t *testing.T) {
 	}
 }
 
+// TestSidebarPathCopy_QuotedOnlyChangesClipboardPayload ensures quoting is a
+// copy policy and never leaks into Current path or Strip prefix calculations.
+func TestSidebarPathCopy_QuotedOnlyChangesClipboardPayload(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.tree.SelectedPath = filepath.Join(a.rootDir, "folder", "file name.txt")
+	copied := recordingClipboard(a, nil)
+
+	plain, valid := a.currentSidebarPath()
+	if plain != "folder/file name.txt" || !valid {
+		t.Fatalf("display path = %q, %v", plain, valid)
+	}
+	a.copyCurrentSidebarPath(false)
+	a.sidebarPathQuoted = true
+	a.copyCurrentSidebarPath(false)
+
+	if got := *copied; len(got) != 2 || got[0] != plain || got[1] != strconv.Quote(plain) {
+		t.Fatalf("clipboard payloads = %#v, want plain then quoted", got)
+	}
+	if displayed, _ := a.currentSidebarPath(); displayed != plain {
+		t.Fatalf("quoted setting changed displayed path to %q", displayed)
+	}
+}
+
 // TestSidebarPathCopy_EmptyValueTracksSuccessfulWrites keeps a successful
 // empty path distinct from the initial state so prefix "." can clear the
 // system clipboard exactly once.
@@ -151,17 +175,17 @@ func TestSidebarPathMouse_RadioInputAndContextBoundary(t *testing.T) {
 	copied := recordingClipboard(a, nil)
 	x, y, _, _ := a.sidebarPathRect()
 
-	if !a.handleSidebarPathMouse(x+2, y+2) || a.sidebarPathType != sidebarPathRelative {
-		t.Fatal("relative radio was not handled")
-	}
-	if len(*copied) != 0 {
-		t.Fatalf("unchanged mode copied %#v", *copied)
-	}
-	if !a.handleSidebarPathMouse(x+16, y+2) || a.sidebarPathType != sidebarPathAbsolute {
-		t.Fatal("absolute radio was not handled")
+	if !a.handleSidebarPathMouse(x+2, y+2) || a.sidebarPathType != sidebarPathAbsolute {
+		t.Fatal("relative checkbox did not switch to absolute")
 	}
 	if got := *copied; len(got) != 1 || got[0] != filepath.ToSlash(a.rootDir) {
-		t.Fatalf("mode copy = %#v, want absolute root", got)
+		t.Fatalf("absolute-mode copy = %#v", got)
+	}
+	if !a.handleSidebarPathMouse(x+16, y+2) || !a.sidebarPathQuoted {
+		t.Fatal("quoted checkbox was not handled")
+	}
+	if got := *copied; len(got) != 2 || got[1] != strconv.Quote(filepath.ToSlash(a.rootDir)) {
+		t.Fatalf("quoted-mode copy = %#v", got)
 	}
 
 	a.sidebarPathPrefix = []rune("a中b")
@@ -306,6 +330,8 @@ func TestSidebarPathMouse_TreePressConsumesMotion(t *testing.T) {
 	if a.dragMode != "" {
 		t.Fatalf("release dragMode = %q, want cleared", a.dragMode)
 	}
+	// Exercise a later independent single click, outside the double-click window.
+	a.lastTreeClick.when = time.Now().Add(-2 * doubleClickMs)
 	a.handleMouse(press)
 	if got := len(*copied); got != 2 {
 		t.Fatalf("second press copies = %d, want 2", got)
@@ -519,6 +545,91 @@ func TestCurrentSidebarPath_EdgeCases(t *testing.T) {
 	}
 }
 
+// TestCurrentSidebarFolderPrefix derives a filename-free folder prefix using
+// the currently selected relative or absolute path mode.
+func TestCurrentSidebarFolderPrefix(t *testing.T) {
+	root := t.TempDir()
+	folder := filepath.Join(root, "docs", "guides")
+	if err := os.MkdirAll(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(folder, "start.md")
+	if err := os.WriteFile(file, []byte("guide"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, root)
+
+	a.tree.SelectedPath = file
+	if got, ok := a.currentSidebarFolderPrefix(); !ok || got != "docs/guides/" {
+		t.Fatalf("relative file prefix = %q, %v", got, ok)
+	}
+	a.tree.SelectedPath = folder
+	if got, ok := a.currentSidebarFolderPrefix(); !ok || got != "docs/guides/" {
+		t.Fatalf("relative folder prefix = %q, %v", got, ok)
+	}
+	a.tree.SelectedPath = root
+	if got, ok := a.currentSidebarFolderPrefix(); !ok || got != "./" {
+		t.Fatalf("relative root prefix = %q, %v", got, ok)
+	}
+	a.sidebarPathType = sidebarPathAbsolute
+	a.tree.SelectedPath = file
+	wantAbsolute := filepath.ToSlash(folder) + "/"
+	if got, ok := a.currentSidebarFolderPrefix(); !ok || got != wantAbsolute {
+		t.Fatalf("absolute file prefix = %q, %v, want %q", got, ok, wantAbsolute)
+	}
+}
+
+// TestToggleCurrentSidebarPrefix sets the selected file's parent on the first
+// activation, clears it on the second, and republishes each displayed value.
+func TestToggleCurrentSidebarPrefix(t *testing.T) {
+	root := t.TempDir()
+	folder := filepath.Join(root, "docs")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(folder, "start.md")
+	if err := os.WriteFile(file, []byte("guide"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, root)
+	a.tree.SelectedPath = file
+	a.sidebarPathPrefixFocused = true
+	a.sidebarPathPrefixScroll = 3
+	copied := recordingClipboard(a, nil)
+
+	a.toggleCurrentSidebarPrefix()
+	if got := string(a.sidebarPathPrefix); got != "docs/" {
+		t.Fatalf("set prefix = %q", got)
+	}
+	if a.sidebarPathPrefixCursor != len([]rune("docs/")) || a.sidebarPathPrefixFocused || a.sidebarPathPrefixScroll != 0 {
+		t.Fatalf("set input state = cursor %d focus %v scroll %d", a.sidebarPathPrefixCursor, a.sidebarPathPrefixFocused, a.sidebarPathPrefixScroll)
+	}
+	if value, valid := a.currentSidebarPath(); value != "start.md" || !valid {
+		t.Fatalf("stripped path = %q, %v", value, valid)
+	}
+
+	a.toggleCurrentSidebarPrefix()
+	if len(a.sidebarPathPrefix) != 0 || a.sidebarPathPrefixCursor != 0 {
+		t.Fatalf("cleared prefix = %q cursor %d", string(a.sidebarPathPrefix), a.sidebarPathPrefixCursor)
+	}
+	if got := *copied; len(got) != 2 || got[0] != "start.md" || got[1] != "docs/start.md" {
+		t.Fatalf("prefix clipboard updates = %#v", got)
+	}
+}
+
+// TestCurrentSidebarPath_RelativeRootPrefix treats ./ as the project-root
+// folder marker even though stored relative file paths omit that prefix.
+func TestCurrentSidebarPath_RelativeRootPrefix(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "start.md")
+	a := newTestApp(t, root)
+	a.tree.SelectedPath = file
+	a.sidebarPathPrefix = []rune("./")
+	if got, valid := a.currentSidebarPath(); got != "start.md" || !valid {
+		t.Fatalf("root-prefixed path = %q, %v", got, valid)
+	}
+}
+
 // TestSidebarPathRect locates the eight-row panel below the file tree and
 // removes it whenever the sidebar cannot render a usable tree.
 func TestSidebarPathRect(t *testing.T) {
@@ -599,7 +710,7 @@ func TestSidebarPathCollapseDrawing(t *testing.T) {
 	if !strings.Contains(collapsed, "PATH INFO ▼") {
 		t.Fatalf("collapsed header = %q, want PATH INFO ▼", collapsed)
 	}
-	for _, label := range []string{"Path type", "Relative", "Absolute", "Strip prefix", "Current path"} {
+	for _, label := range []string{"Path setting", "Relative", "quoted", "Strip prefix", "Current path"} {
 		if strings.Contains(collapsed, label) {
 			t.Fatalf("collapsed header contains body label %q: %q", label, collapsed)
 		}
@@ -846,7 +957,7 @@ func TestDrawSidebarPath(t *testing.T) {
 		panel = append(panel, screenLine(a.screen.(tcell.SimulationScreen), y)[:pw])
 	}
 	joined := strings.Join(panel, "\n")
-	for _, want := range []string{"PATH INFO", "Path type", "(x) Relative  ( ) Absolute", "Strip prefix", "Current path"} {
+	for _, want := range []string{"PATH INFO", "Path setting", "☑ Relative  ☐ quoted", "Strip prefix", "Current path"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("panel is missing %q:\n%s", want, joined)
 		}
@@ -854,11 +965,11 @@ func TestDrawSidebarPath(t *testing.T) {
 
 	_, _, _, treeH := a.sidebarRect()
 	for y := 0; y < treeH; y++ {
-		if strings.Contains(screenLine(a.screen.(tcell.SimulationScreen), y)[:pw], "Path type") {
+		if strings.Contains(screenLine(a.screen.(tcell.SimulationScreen), y)[:pw], "Path setting") {
 			t.Fatalf("panel label leaked into tree row %d", y)
 		}
 	}
-	if strings.Contains(screenLine(a.screen.(tcell.SimulationScreen), a.height-1), "Path type") {
+	if strings.Contains(screenLine(a.screen.(tcell.SimulationScreen), a.height-1), "Path setting") {
 		t.Fatal("panel label leaked into status row")
 	}
 
@@ -973,13 +1084,13 @@ func TestDrawSidebarPath_CompactRadioLayout(t *testing.T) {
 		panel = append(panel, screenLine(a.screen.(tcell.SimulationScreen), y)[:pw])
 	}
 	joined := strings.Join(panel, "\n")
-	for _, want := range []string{"PATH INFO", "(x) Relative", "( ) Absolute"} {
+	for _, want := range []string{"PATH INFO", "☑ Relative", "☐ quoted"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("compact panel is missing %q:\n%s", want, joined)
 		}
 	}
-	if strings.Contains(panel[2], "Absolute") {
-		t.Fatalf("absolute option should use its own compact row:\n%s", joined)
+	if strings.Contains(panel[2], "quoted") {
+		t.Fatalf("quoted option should use its own compact row:\n%s", joined)
 	}
 }
 
