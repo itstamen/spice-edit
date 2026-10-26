@@ -11,10 +11,45 @@ package app
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+// TestDarwinRevealSerializesConcurrentRequests prevents overlapping scripts
+// from selecting or retargeting each other's Finder tabs.
+func TestDarwinRevealSerializesConcurrentRequests(t *testing.T) {
+	dir := t.TempDir()
+	script := `#!/bin/sh
+if ! /bin/mkdir "$SPICEEDIT_FINDER_TEST_DIR/active" 2>/dev/null; then
+	echo "Finder automation overlapped" >&2
+	exit 1
+fi
+trap '/bin/rmdir "$SPICEEDIT_FINDER_TEST_DIR/active"' EXIT
+/bin/sleep 0.05
+`
+	if err := os.WriteFile(filepath.Join(dir, "osascript"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("SPICEEDIT_FINDER_TEST_DIR", dir)
+	start := make(chan struct{})
+	results := make(chan error, 8)
+	for range cap(results) {
+		go func() {
+			<-start
+			results <- platformRevealPath(dir, false)
+		}()
+	}
+	close(start)
+	for range cap(results) {
+		if err := <-results; err != nil {
+			t.Errorf("concurrent reveal: %v", err)
+		}
+	}
+}
 
 // TestDarwinRevealTarget maps files to their Finder parent directory.
 func TestDarwinRevealTarget(t *testing.T) {
@@ -64,9 +99,9 @@ func TestFinderTabRevealScriptReusesExistingTabs(t *testing.T) {
 		"on activateMatchingFinderTab(targetFolderPath)",
 		"set finderWindowIDs to id of every Finder window",
 		"repeat with finderWindowID in finderWindowIDs",
-		"set index of Finder window id (contents of finderWindowID) to 1",
-		"set tabButtons to radio buttons of tab group 1 of front window",
-		"click tabButton",
+		"if my finderWindowTargetPath(candidateID) is targetFolderPath then",
+		"set index of Finder window id candidateID to 1",
+		"if activeWindowID is candidateID and my finderWindowTargetPath(candidateID) is targetFolderPath then return true",
 	}
 	last := -1
 	for _, fragment := range scanFragments {
@@ -79,17 +114,19 @@ func TestFinderTabRevealScriptReusesExistingTabs(t *testing.T) {
 		}
 		last = index
 	}
-	matchedTabIndex := strings.Index(finderTabRevealScript[last:], "if my activeFinderTargetPath() is targetFolderPath then return true")
-	if matchedTabIndex == -1 {
-		t.Fatal("script does not compare a clicked tab's folder with the target")
+	if strings.Contains(finderTabRevealScript, "click tabButton") {
+		t.Fatal("existing tabs should be matched by stable Finder IDs, not stale UI references")
 	}
 
 	runFragments := []string{
 		"set targetFolderPath to POSIX path of targetFolder",
-		"set originalFrontWindow to front Finder window",
+		"set originalFrontWindowID to id of front Finder window",
 		"if my activateMatchingFinderTab(targetFolderPath) then return",
-		"set index of originalFrontWindow to 1",
+		"set index of Finder window id originalFrontWindowID to 1",
+		"set previousWindowIDs to id of every Finder window",
 		"keystroke \"t\" using {command down}",
+		"set newWindowID to my waitForNewFinderTab(previousWindowIDs)",
+		"my openFinderTabFolder(newWindowID, targetFolder, targetFolderPath)",
 	}
 	last = -1
 	for _, fragment := range runFragments {
@@ -118,11 +155,8 @@ func TestFinderTabRevealScriptReusesExistingTabs(t *testing.T) {
 	}
 
 	readinessCall := "if not my waitForFinderWindow() then error \"Finder UI did not become ready for tab automation\""
-	if strings.Count(finderTabRevealScript, readinessCall) != 2 {
-		t.Fatalf("readiness calls = %d, want 2", strings.Count(finderTabRevealScript, readinessCall))
-	}
-	if strings.Index(finderTabRevealScript, readinessCall) > strings.Index(finderTabRevealScript, "set tabGroups to tab groups of front window") {
-		t.Fatal("tab scan starts before Finder UI readiness check")
+	if strings.Count(finderTabRevealScript, readinessCall) != 1 {
+		t.Fatalf("readiness calls = %d, want 1", strings.Count(finderTabRevealScript, readinessCall))
 	}
 	if strings.LastIndex(finderTabRevealScript, readinessCall) > strings.Index(finderTabRevealScript, "keystroke \"t\" using {command down}") {
 		t.Fatal("new-tab shortcut starts before Finder UI readiness check")

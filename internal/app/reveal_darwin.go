@@ -14,14 +14,24 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
+// finderRevealMu keeps asynchronous reveal requests from interleaving Finder
+// activation, tab creation, and navigation within this process.
+var finderRevealMu sync.Mutex
+
 // finderTabRevealScript activates or opens the requested Finder folder.
-const finderTabRevealScript = `on activeFinderTargetPath()
+const finderTabRevealScript = `on finderWindowTargetPath(finderWindowID)
 	tell application "Finder"
-		return POSIX path of (target of front Finder window as alias)
+		try
+			return POSIX path of (target of Finder window id finderWindowID as alias)
+		on error
+			-- Virtual locations such as Recents have no filesystem alias.
+			return ""
+		end try
 	end tell
-end activeFinderTargetPath
+end finderWindowTargetPath
 
 on waitForFinderWindow()
 	tell application "System Events"
@@ -37,29 +47,48 @@ on waitForFinderWindow()
 end waitForFinderWindow
 
 on activateMatchingFinderTab(targetFolderPath)
+	-- Finder's window collection includes background tabs with stable IDs.
 	tell application "Finder" to set finderWindowIDs to id of every Finder window
 	repeat with finderWindowID in finderWindowIDs
-		tell application "Finder" to set index of Finder window id (contents of finderWindowID) to 1
-		delay 0.05
-		if not my waitForFinderWindow() then error "Finder UI did not become ready for tab automation"
-		tell application "System Events"
-			tell process "Finder"
-				set tabGroups to tab groups of front window
-				if (count of tabGroups) is 0 then
-					if my activeFinderTargetPath() is targetFolderPath then return true
-				else
-					set tabButtons to radio buttons of tab group 1 of front window
-					repeat with tabButton in tabButtons
-						click tabButton
-						delay 0.05
-						if my activeFinderTargetPath() is targetFolderPath then return true
-					end repeat
-				end if
-			end tell
-		end tell
+		set candidateID to contents of finderWindowID
+		if my finderWindowTargetPath(candidateID) is targetFolderPath then
+			tell application "Finder" to set index of Finder window id candidateID to 1
+			repeat 100 times
+				tell application "Finder" to set activeWindowID to id of front Finder window
+				if activeWindowID is candidateID and my finderWindowTargetPath(candidateID) is targetFolderPath then return true
+				delay 0.05
+			end repeat
+			error "Finder did not activate the requested folder tab before the timeout"
+		end if
 	end repeat
 	return false
 end activateMatchingFinderTab
+
+on waitForNewFinderTab(previousWindowIDs)
+	repeat 100 times
+		tell application "Finder"
+			try
+				set activeWindowID to id of front Finder window
+				if previousWindowIDs does not contain activeWindowID then return activeWindowID
+			end try
+		end tell
+		delay 0.05
+	end repeat
+	error "Finder did not open a new tab before the timeout"
+end waitForNewFinderTab
+
+on openFinderTabFolder(finderWindowID, targetFolder, targetFolderPath)
+	repeat 100 times
+		try
+			tell application "Finder" to set target of Finder window id finderWindowID to targetFolder
+			delay 0.05
+			tell application "Finder" to set activeWindowID to id of front Finder window
+			if activeWindowID is finderWindowID and my finderWindowTargetPath(finderWindowID) is targetFolderPath then return
+		end try
+		delay 0.05
+	end repeat
+	error "Finder did not navigate the new tab to the requested folder before the timeout"
+end openFinderTabFolder
 
 on run argv
 	set targetFolder to POSIX file (item 1 of argv) as alias
@@ -70,19 +99,21 @@ on run argv
 			make new Finder window to targetFolder
 			return
 		end if
-		set originalFrontWindow to front Finder window
+		set originalFrontWindowID to id of front Finder window
 	end tell
 	if my activateMatchingFinderTab(targetFolderPath) then return
-	tell application "Finder" to set index of originalFrontWindow to 1
+	tell application "Finder" to set index of Finder window id originalFrontWindowID to 1
 	if not my waitForFinderWindow() then error "Finder UI did not become ready for tab automation"
+	tell application "Finder" to set previousWindowIDs to id of every Finder window
 	tell application "System Events"
 		tell process "Finder"
 			set frontmost to true
 			keystroke "t" using {command down}
 		end tell
 	end tell
-	delay 0.1
-	tell application "Finder" to set target of front Finder window to targetFolder
+	-- Finder gives each tab an ID, but Cmd+T returns before that tab exists.
+	set newWindowID to my waitForNewFinderTab(previousWindowIDs)
+	my openFinderTabFolder(newWindowID, targetFolder, targetFolderPath)
 end run`
 
 // darwinRevealTarget returns the folder Finder should open for the request.
@@ -119,6 +150,9 @@ func darwinRevealError(err error) error {
 
 // platformRevealPath opens the requested folder in a Finder window or tab.
 func platformRevealPath(path string, selectFile bool) error {
+	finderRevealMu.Lock()
+	defer finderRevealMu.Unlock()
+
 	output, err := exec.Command("osascript", darwinRevealArgs(path, selectFile)...).CombinedOutput()
 	if err != nil {
 		message := strings.TrimSpace(string(output))
