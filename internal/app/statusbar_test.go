@@ -76,7 +76,7 @@ func TestDrawStatusBar_BranchFirstAndButtons(t *testing.T) {
 func TestStatusBarButtons_RightAlignedAndConstrained(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	buttons := a.statusBarButtons()
-	if len(buttons) != 4 || buttons[len(buttons)-2].Label != "Prefix" || buttons[len(buttons)-1].Label != "Menu" {
+	if len(buttons) != 7 || buttons[len(buttons)-3].Label != "RPath" || buttons[len(buttons)-2].Label != "FileName" || buttons[len(buttons)-1].Label != "Menu" {
 		t.Fatalf("buttons = %#v", buttons)
 	}
 	last := buttons[len(buttons)-1]
@@ -93,6 +93,79 @@ func TestStatusBarButtons_RightAlignedAndConstrained(t *testing.T) {
 	buttons = a.statusBarButtons()
 	if len(buttons) != 1 || buttons[0].Label != "Menu" {
 		t.Fatalf("narrow buttons = %#v, want Menu only", buttons)
+	}
+}
+
+// TestStatusBarMouse_PathButtonsCopySelectedNode verifies FPath, RPath, and
+// FileName copy the exact selected node and ignore the sidebar path display
+// and quoting settings.
+func TestStatusBarMouse_PathButtonsCopySelectedNode(t *testing.T) {
+	root := t.TempDir()
+	folder := filepath.Join(root, "docs")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(folder, "guide.md")
+	if err := os.WriteFile(file, []byte("guide"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, root)
+	a.sidebarPathType = sidebarPathAbsolute
+	a.sidebarPathQuoted = true
+	copied := recordingClipboard(a, nil)
+	_, sy, _, _ := a.statusRect()
+
+	button := func(label string) statusBarButton {
+		for _, candidate := range a.statusBarButtons() {
+			if candidate.Label == label {
+				return candidate
+			}
+		}
+		t.Fatalf("%s button is missing", label)
+		return statusBarButton{}
+	}
+	click := func(label string) {
+		b := button(label)
+		before := len(*copied)
+		a.handleMouse(tcell.NewEventMouse(b.X+1, sy, tcell.Button1, tcell.ModNone))
+		if got := len(*copied); got != before {
+			t.Fatalf("%s copied on press: %#v", label, *copied)
+		}
+		a.handleMouse(tcell.NewEventMouse(b.X+1, sy, tcell.ButtonNone, tcell.ModNone))
+		if got := len(*copied); got != before+1 {
+			t.Fatalf("%s copied %d values, want 1: %#v", label, got-before, *copied)
+		}
+	}
+	last := func() string {
+		return (*copied)[len(*copied)-1]
+	}
+
+	a.tree.SelectedPath = folder
+	click("RPath")
+	if got := last(); got != "docs" {
+		t.Fatalf("folder RPath = %q, want docs", got)
+	}
+	click("FPath")
+	if got := last(); got != folder {
+		t.Fatalf("folder FPath = %q, want %q", got, folder)
+	}
+	click("FileName")
+	if got := last(); got != "docs" {
+		t.Fatalf("folder FileName = %q, want docs", got)
+	}
+
+	a.tree.SelectedPath = file
+	click("RPath")
+	if got := last(); got != filepath.Join("docs", "guide.md") {
+		t.Fatalf("file RPath = %q, want docs/guide.md", got)
+	}
+	click("FPath")
+	if got := last(); got != file {
+		t.Fatalf("file FPath = %q, want %q", got, file)
+	}
+	click("FileName")
+	if got := last(); got != "guide.md" {
+		t.Fatalf("file FileName = %q, want guide.md", got)
 	}
 }
 

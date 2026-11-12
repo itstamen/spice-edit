@@ -8,6 +8,7 @@
 package app
 
 import (
+	"path/filepath"
 	"runtime"
 
 	"github.com/gdamore/tcell/v2"
@@ -47,6 +48,9 @@ func (a *App) statusBarButtons() []statusBarButton {
 		{Label: "Open..", Action: statusOpenWithDefaultApp},
 		{Label: statusFileManagerLabel(runtime.GOOS), Action: statusShowInFileManager},
 		{Label: "Prefix", Action: statusToggleCurrentPrefix},
+		{Label: "FPath", Action: statusCopyFullPath},
+		{Label: "RPath", Action: statusCopyRelativePath},
+		{Label: "FileName", Action: statusCopyFileName},
 		{Label: "Menu", Action: statusOpenMenu},
 	}
 
@@ -134,6 +138,36 @@ func statusShowInFileManager(a *App) {
 // statusToggleCurrentPrefix switches Strip prefix for the selected tree node.
 func statusToggleCurrentPrefix(a *App) {
 	a.toggleCurrentSidebarPrefix()
+}
+
+// statusCopyPathTarget resolves the active path target, renders it with
+// render, and publishes the result to the system clipboard. Status-bar path
+// buttons intentionally bypass the sidebar's display and quoting settings so
+// they always copy a usable path.
+func (a *App) statusCopyPathTarget(label string, render func(string) string) {
+	target, ok := a.pathActionTarget()
+	if !ok {
+		a.flash("No path selected")
+		return
+	}
+	a.copyPathToSystemClipboard(render(target), label)
+}
+
+// statusCopyFullPath copies the exact selected node's absolute path.
+func statusCopyFullPath(a *App) {
+	a.statusCopyPathTarget("absolute path", absolutePathFor)
+}
+
+// statusCopyRelativePath copies the exact selected node's project-relative
+// path.
+func statusCopyRelativePath(a *App) {
+	a.statusCopyPathTarget("relative path", a.relativePathFor)
+}
+
+// statusCopyFileName copies the exact selected node's base name. Files keep
+// their extension; folders use their final path component.
+func statusCopyFileName(a *App) {
+	a.statusCopyPathTarget("file name", filepath.Base)
 }
 
 // statusOpenMenu shares the action reached by pressing Esc twice.

@@ -208,11 +208,15 @@ Then:
   Its `▲`/`▼` header control collapses or expands the panel. It starts expanded,
   and SpiceEdit remembers the choice in `config.json`.
 - The status bar starts with the current Git branch and includes `Open..`,
-  `Finder`/`Explorer`, `Prefix`, and `Menu` actions on the right. `Open..`,
-  the file-manager action, and `Menu` mirror `Esc o`, `Esc e`, and `Esc Esc`.
-  `Prefix` toggles **Strip prefix** between empty and the selected node's
-  containing folder (or the selected folder itself), using the active relative
-  or absolute path mode.
+  `Finder`/`Explorer`, `Prefix`, `FPath`, `RPath`, `FileName`, and `Menu`
+  actions on the right. `Open..`, the file-manager action, and `Menu` mirror
+  `Esc o`, `Esc e`, and `Esc Esc`. `Prefix` toggles **Strip prefix** between
+  empty and the selected node's containing folder (or the selected folder
+  itself), using the active relative or absolute path mode. `FPath` copies the
+  exact selected node's absolute path, `RPath` copies its project-relative
+  path, and `FileName` copies its base name with any extension. These three
+  path actions ignore the sidebar's display, strip-prefix, and quoted
+  settings.
 - Click and drag in the editor to select; drag past the top or bottom
   edge to auto-scroll the selection.
 
